@@ -352,18 +352,26 @@ public class AnimationEngine {
 
             org.bukkit.entity.Entity root = instance.getRootEntity();
             org.bukkit.entity.Entity vehicleRoot = instance.getVehicleRoot();
-            boolean isPassenger = (root != null || vehicleRoot != null);
+            boolean isPassenger = (vehicleRoot != null);
 
             float mountHeight = 0f;
             if (isPassenger) {
                 top.sanscraft.bde.manager.ModelManager.BoundingBox box = plugin.getModelManager().calculateModelBounds(instance.getModel(), scale);
                 float interactionHeight = Math.max(0.1f, box.getMaxY());
-                mountHeight = plugin.getModelManager().getMountHeight(vehicleRoot != null ? vehicleRoot : root, interactionHeight);
+                mountHeight = plugin.getModelManager().getMountHeight(vehicleRoot, interactionHeight);
             }
 
             Location loc = instance.getLocation();
             float yaw = (float) loc.getYaw();
             float pitch = (float) loc.getPitch();
+            if (isPassenger) {
+                if (top.sanscraft.bde.manager.ModelManager.isVersion1_20_5_OrHigher()) {
+                    yaw = 0.0f;
+                } else {
+                    float spawnYaw = (float) instance.getSpawnLocation().getYaw();
+                    yaw = (float) ((yaw - spawnYaw) % 360.0);
+                }
+            }
 
             Matrix4f finalMatrix;
             if (isPassenger) {

@@ -40,6 +40,15 @@ import top.sanscraft.bde.model.ModelInstance;
 public class ModelManager {
     public static boolean DEBUG_VEHICLES = false;
 
+    public static boolean isVersion1_20_5_OrHigher() {
+        try {
+            Class.forName("org.bukkit.inventory.meta.components.ItemComponentTypes");
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+
     private static boolean paperTeleportFlagsAvailable = false;
     private static Object[] retainPassengersFlags = null;
 
@@ -503,8 +512,12 @@ public class ModelManager {
             float yaw = (float) loc.getYaw();
             float pitch = (float) loc.getPitch();
             if (isPassenger) {
-                float spawnYaw = (float) instance.getSpawnLocation().getYaw();
-                yaw = (float) ((yaw - spawnYaw) % 360.0);
+                if (isVersion1_20_5_OrHigher()) {
+                    yaw = 0.0f;
+                } else {
+                    float spawnYaw = (float) instance.getSpawnLocation().getYaw();
+                    yaw = (float) ((yaw - spawnYaw) % 360.0);
+                }
             }
 
             for (Display display : instance.getPassengers()) {
