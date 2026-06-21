@@ -42,7 +42,7 @@ public class ModelManager {
 
     public static boolean isVersion1_20_5_OrHigher() {
         try {
-            Class.forName("org.bukkit.inventory.meta.components.ItemComponentTypes");
+            Class.forName("org.bukkit.inventory.meta.components.FoodComponent");
             return true;
         } catch (ClassNotFoundException e) {
             return false;
