@@ -1787,6 +1787,15 @@ public class ModelManager {
         if (valIdx == -1) {
             valIdx = snbt.indexOf("Value");
         }
+        if (valIdx == -1) {
+            valIdx = snbt.indexOf("\"value\"");
+        }
+        if (valIdx == -1) {
+            valIdx = snbt.indexOf("'value'");
+        }
+        if (valIdx == -1) {
+            valIdx = snbt.indexOf("value");
+        }
         if (valIdx == -1) return null;
 
         int colonIdx = snbt.indexOf(":", valIdx);

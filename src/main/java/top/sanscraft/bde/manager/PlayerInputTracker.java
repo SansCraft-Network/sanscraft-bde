@@ -51,13 +51,13 @@ public class PlayerInputTracker {
 
                                 Object inputObj = event.getClass().getMethod("getInput").invoke(event);
                                 PlayerInputData data = new PlayerInputData();
-                                data.forward = (boolean) inputObj.getClass().getMethod("isForward").invoke(inputObj);
-                                data.backward = (boolean) inputObj.getClass().getMethod("isBackward").invoke(inputObj);
-                                data.left = (boolean) inputObj.getClass().getMethod("isLeft").invoke(inputObj);
-                                data.right = (boolean) inputObj.getClass().getMethod("isRight").invoke(inputObj);
-                                data.jump = (boolean) inputObj.getClass().getMethod("isJump").invoke(inputObj);
-                                data.shift = (boolean) inputObj.getClass().getMethod("isSneak").invoke(inputObj);
-                                data.sprint = (boolean) inputObj.getClass().getMethod("isSprint").invoke(inputObj);
+                                data.forward = getBooleanInput(inputObj, "isForward", "forward");
+                                data.backward = getBooleanInput(inputObj, "isBackward", "backward");
+                                data.left = getBooleanInput(inputObj, "isLeft", "left");
+                                data.right = getBooleanInput(inputObj, "isRight", "right");
+                                data.jump = getBooleanInput(inputObj, "isJump", "jump", "jumping");
+                                data.shift = getBooleanInput(inputObj, "isSneak", "sneak", "isShift", "shift");
+                                data.sprint = getBooleanInput(inputObj, "isSprint", "sprint");
 
                                 inputs.put(uuid, data);
 
@@ -263,8 +263,8 @@ public class PlayerInputTracker {
                         boolean val = (boolean) m.invoke(inputObj);
                         if (name.equals("forward") || name.equals("isforward")) { data.forward = val; parsed = true; }
                         else if (name.equals("backward") || name.equals("isbackward")) { data.backward = val; parsed = true; }
-                        else if (name.equals("left") || name.equals("isleft")) { data.left = val; parsed = true; }
-                        else if (name.equals("right") || name.equals("isright")) { data.right = val; parsed = true; }
+                        else if (name.equals("left") || name.equals("isleft") || name.equals("pressingleft")) { data.left = val; parsed = true; }
+                        else if (name.equals("right") || name.equals("isright") || name.equals("pressingright")) { data.right = val; parsed = true; }
                         else if (name.equals("jump") || name.equals("isjump") || name.equals("jumping")) { data.jump = val; parsed = true; }
                         else if (name.equals("shift") || name.equals("sneak") || name.equals("issneak") || name.equals("isshift") || name.equals("shiftkeydown")) { data.shift = val; parsed = true; }
                         else if (name.equals("sprint") || name.equals("issprint")) { data.sprint = val; parsed = true; }
@@ -283,8 +283,8 @@ public class PlayerInputTracker {
                         // Named fields
                         if (name.equals("forward") || name.equals("zza") || name.equals("forwardkey")) { data.forward = val; parsed = true; }
                         else if (name.equals("backward") || name.equals("backkey")) { data.backward = val; parsed = true; }
-                        else if (name.equals("left") || name.equals("xxa") || name.equals("leftkey")) { data.left = val; parsed = true; }
-                        else if (name.equals("right") || name.equals("rightkey")) { data.right = val; parsed = true; }
+                        else if (name.equals("left") || name.equals("xxa") || name.equals("leftkey") || name.equals("pressingleft")) { data.left = val; parsed = true; }
+                        else if (name.equals("right") || name.equals("rightkey") || name.equals("pressingright")) { data.right = val; parsed = true; }
                         else if (name.equals("jump") || name.equals("jumping") || name.equals("jumpkey")) { data.jump = val; parsed = true; }
                         else if (name.equals("shift") || name.equals("sneak") || name.equals("shiftkeydown") || name.equals("sneakkey")) { data.shift = val; parsed = true; }
                         else if (name.equals("sprint") || name.equals("sprintkey")) { data.sprint = val; parsed = true; }
@@ -389,5 +389,20 @@ public class PlayerInputTracker {
             }
         }
         return null;
+    }
+
+    private static boolean getBooleanInput(Object inputObj, String... methodNames) {
+        for (String name : methodNames) {
+            try {
+                java.lang.reflect.Method m = inputObj.getClass().getMethod(name);
+                m.setAccessible(true);
+                return (boolean) m.invoke(inputObj);
+            } catch (NoSuchMethodException e) {
+                // Try next
+            } catch (Exception e) {
+                // Ignore other exceptions
+            }
+        }
+        return false;
     }
 }
