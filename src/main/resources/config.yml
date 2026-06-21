@@ -1,0 +1,28 @@
+# SansCraft Block Display Engine Integration Config
+
+# BDE Server API Endpoint
+api-endpoint: "https://block-display.com/server-api/"
+
+# How long to cache downloaded models locally in minutes (1440 = 24 hours)
+cache-duration-minutes: 1440
+
+# Voxel conversion defaults
+voxels:
+  # Default block to use if a color index cannot be mapped
+  default-block: "minecraft:white_concrete"
+  
+  # Optimize models by default using Greedy Meshing
+  use-greedy-meshing: true
+
+  # Maximum block display entities that a converted mesh model can produce
+  max-display-entities: 1000
+
+# Blockbench conversion defaults
+blockbench:
+  # Default block to use for unmapped textures
+  default-block: "minecraft:oak_planks"
+
+# GUI and Selection Settings
+gui:
+  # The item used to select and edit BDE models in-game
+  selector-tool: "BLAZE_ROD"

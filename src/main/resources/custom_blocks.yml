@@ -1,0 +1,30 @@
+# Custom Blocks Configuration
+# Maps custom block IDs to block display models (BDE JSON format).
+# Custom blocks use a physical BARRIER block for solid collision,
+# and render the model as a client-side display on top.
+
+custom_blocks:
+  magma_forge:
+    # Model ID or filename (in models/ folder, without .json extension)
+    model: "magma_forge"
+    # Scale multiplier
+    scale: 1.0
+    # Positional offset from the block's minimum corner (x, y, z)
+    offset: [0.5, 0.0, 0.5]
+    # Display item properties given to players
+    item:
+      material: "BRICK"
+      name: "<red>Magma Forge"
+      lore:
+        - "<gray>A custom workstation for forge operations."
+        - "<gold>Place to deploy."
+
+  wooden_chair:
+    model: "wooden_chair"
+    scale: 0.8
+    offset: [0.5, 0.0, 0.5]
+    item:
+      material: "OAK_STAIRS"
+      name: "<yellow>Wooden Chair"
+      lore:
+        - "<gray>A detailed 3D chair model."
