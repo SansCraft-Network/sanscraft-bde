@@ -29,7 +29,7 @@ public class LockCommand implements CommandExecutor, TabCompleter {
         }
 
         Player player = (Player) sender;
-        if (!player.hasPermission("sanscraft.bde.admin")) {
+        if (!player.hasPermission("sanscraft.bde.lock")) {
             player.sendMessage(ChatColor.RED + "You do not have permission to execute this command.");
             return true;
         }
