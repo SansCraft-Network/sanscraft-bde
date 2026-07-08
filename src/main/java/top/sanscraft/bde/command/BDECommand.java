@@ -89,8 +89,14 @@ public class BDECommand implements CommandExecutor, TabCompleter {
             case "gui":
                 handleGui(sender);
                 break;
+            case "traction":
+                handleTraction(sender);
+                break;
             case "debug":
                 handleDebug(sender, args);
+                break;
+            case "test_transform":
+                handleTestTransform(sender, args);
                 break;
             default:
                 sendHelp(sender);
@@ -645,6 +651,16 @@ public class BDECommand implements CommandExecutor, TabCompleter {
         plugin.getBdeGuiManager().openMainMenu(player, instance);
     }
 
+    private void handleTraction(CommandSender sender) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(ChatColor.RED + "Only players can run this subcommand.");
+            return;
+        }
+        Player player = (Player) sender;
+        plugin.getBdeGuiManager().openGeneralBlockTractionMenu(player);
+        player.sendMessage(ChatColor.GREEN + "Opened Global Block Traction menu.");
+    }
+
     private void sendHelp(CommandSender sender) {
         sender.sendMessage(ChatColor.GOLD + "=== SansCraft BDE Command Guide ===");
         sender.sendMessage(ChatColor.YELLOW + "/bde spawn <id|filename> [scale] [x] [y] [z] [yaw] §7- Spawns model at coords");
@@ -660,12 +676,13 @@ public class BDECommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(ChatColor.YELLOW + "/bde deselect / clear §7- Clears current model selection");
         sender.sendMessage(ChatColor.YELLOW + "/bde rotate <angle> §7- Rotates model by yaw degrees");
         sender.sendMessage(ChatColor.YELLOW + "/bde gui §7- Opens the GUI editor console for selected model");
+        sender.sendMessage(ChatColor.YELLOW + "/bde traction §7- Opens the global block traction overrides GUI");
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-            return filter(Arrays.asList("spawn", "remove", "list", "anim", "convert", "block", "select", "deselect", "clear", "rotate", "gui", "move", "vehicles", "debug"), args[0]);
+            return filter(Arrays.asList("spawn", "remove", "list", "anim", "convert", "block", "select", "deselect", "clear", "rotate", "gui", "move", "vehicles", "debug", "traction", "test_transform"), args[0]);
         }
 
         String subcommand = args[0].toLowerCase();
@@ -793,6 +810,346 @@ public class BDECommand implements CommandExecutor, TabCompleter {
     private void handleDebug(CommandSender sender, String[] args) {
         ModelManager.DEBUG_VEHICLES = !ModelManager.DEBUG_VEHICLES;
         sender.sendMessage(ChatColor.GREEN + "Vehicle debugging has been " + (ModelManager.DEBUG_VEHICLES ? "ENABLED" : "DISABLED") + ".");
+    }
+
+    // ================================================================
+    // TEST TRANSFORM — animation state
+    // ================================================================
+    private double ttVehicleYaw = 0.0;
+    private double ttVehiclePitch = 0.0;
+    private double ttRelativeYaw = 0.0;
+    private double ttRelativePitch = 0.0;
+    private Location ttRootLocation = null;
+    private org.bukkit.scheduler.BukkitTask ttAnimTask = null;
+
+    // Persistent marker entities (teleported each tick instead of respawned)
+    private org.bukkit.entity.BlockDisplay ttMarkerRoot = null;
+    private org.bukkit.entity.BlockDisplay ttMarkerPivot = null;
+    private org.bukkit.entity.BlockDisplay ttMarkerSeat = null;
+    private org.bukkit.entity.BlockDisplay ttMarkerMuzzle = null;
+
+    // Animation increments per tick (applied additively each server tick)
+    private double ttAnimVYawPerTick = 0.0;
+    private double ttAnimVPitchPerTick = 0.0;
+    private double ttAnimRYawPerTick = 0.0;
+    private double ttAnimRPitchPerTick = 0.0;
+    private int ttAnimTicksRemaining = 0;
+
+    private void handleTestTransform(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(ChatColor.RED + "Only players can run this subcommand.");
+            return;
+        }
+
+        Player player = (Player) sender;
+
+        if (args.length < 2) {
+            sendTestTransformUsage(player);
+            return;
+        }
+
+        String sub = args[1].toLowerCase();
+
+        switch (sub) {
+            case "clear":
+                stopTestAnimation();
+                removeTestMarkers();
+                ttVehicleYaw = ttVehiclePitch = ttRelativeYaw = ttRelativePitch = 0.0;
+                ttRootLocation = null;
+                player.sendMessage("§aCleared all test transform state and markers.");
+                return;
+
+            case "stop":
+                stopTestAnimation();
+                player.sendMessage("§aStopped all animations. Current values:");
+                sendTestValues(player);
+                return;
+
+            case "reset":
+                stopTestAnimation();
+                ttVehicleYaw = ttVehiclePitch = ttRelativeYaw = ttRelativePitch = 0.0;
+                refreshTestMarkers(player);
+                player.sendMessage("§aReset all values to 0. Markers updated.");
+                sendTestValues(player);
+                return;
+
+            case "status":
+                sendTestValues(player);
+                if (ttAnimTask != null) {
+                    player.sendMessage("§eAnimation active — " + ttAnimTicksRemaining + " ticks remaining.");
+                } else {
+                    player.sendMessage("§7No animation running.");
+                }
+                return;
+
+            case "set":
+                // /bde test_transform set <vyaw> <vpitch> <ryaw> <rpitch>
+                stopTestAnimation();
+                if (args.length >= 3) try { ttVehicleYaw = Double.parseDouble(args[2]); } catch (NumberFormatException ignored) {}
+                if (args.length >= 4) try { ttVehiclePitch = Double.parseDouble(args[3]); } catch (NumberFormatException ignored) {}
+                if (args.length >= 5) try { ttRelativeYaw = Double.parseDouble(args[4]); } catch (NumberFormatException ignored) {}
+                if (args.length >= 6) try { ttRelativePitch = Double.parseDouble(args[5]); } catch (NumberFormatException ignored) {}
+                if (ttRootLocation == null) {
+                    ttRootLocation = player.getLocation().clone();
+                    ttRootLocation.setPitch(0.0f);
+                    ttRootLocation.setYaw(0.0f);
+                }
+                refreshTestMarkers(player);
+                sendTestValues(player);
+                return;
+
+            case "animate":
+                // /bde test_transform animate <field> <totalDelta> <seconds>
+                if (args.length < 5) {
+                    player.sendMessage("§cUsage: /bde test_transform animate <vyaw|vpitch|ryaw|rpitch> <delta> <seconds>");
+                    player.sendMessage("§7Example: §f/bde test_transform animate vyaw 360 10");
+                    player.sendMessage("§7  → rotates vehicle yaw by 360° over 10 seconds");
+                    return;
+                }
+                String field = args[2].toLowerCase();
+                double delta;
+                double seconds;
+                try {
+                    delta = Double.parseDouble(args[3]);
+                    seconds = Double.parseDouble(args[4]);
+                } catch (NumberFormatException e) {
+                    player.sendMessage("§cInvalid numbers. Usage: animate <field> <delta> <seconds>");
+                    return;
+                }
+                if (seconds <= 0) {
+                    player.sendMessage("§cSeconds must be positive.");
+                    return;
+                }
+                int totalTicks = (int) (seconds * 20.0);
+                double perTick = delta / totalTicks;
+
+                switch (field) {
+                    case "vyaw":  ttAnimVYawPerTick = perTick; break;
+                    case "vpitch": ttAnimVPitchPerTick = perTick; break;
+                    case "ryaw":  ttAnimRYawPerTick = perTick; break;
+                    case "rpitch": ttAnimRPitchPerTick = perTick; break;
+                    default:
+                        player.sendMessage("§cUnknown field: §f" + field + "§c. Use: vyaw, vpitch, ryaw, rpitch");
+                        return;
+                }
+
+                if (ttRootLocation == null) {
+                    ttRootLocation = player.getLocation().clone();
+                    ttRootLocation.setPitch(0.0f);
+                    ttRootLocation.setYaw(0.0f);
+                }
+
+                // Start or extend animation
+                ttAnimTicksRemaining = Math.max(ttAnimTicksRemaining, totalTicks);
+                if (ttAnimTask == null) {
+                    startTestAnimation(player);
+                }
+
+                player.sendMessage("§aAnimating §e" + field + "§a by §f" + delta + "°§a over §f" + seconds + "s§a (" + totalTicks + " ticks, " + String.format("%.4f", perTick) + "°/tick)");
+                sendTestValues(player);
+                return;
+
+            default:
+                // Try to parse as legacy: /bde test_transform <vYaw> <vPitch> <rYaw> <rPitch>
+                stopTestAnimation();
+                try { ttVehicleYaw = Double.parseDouble(args[1]); } catch (NumberFormatException e) {
+                    sendTestTransformUsage(player);
+                    return;
+                }
+                if (args.length >= 3) try { ttVehiclePitch = Double.parseDouble(args[2]); } catch (NumberFormatException ignored) {}
+                if (args.length >= 4) try { ttRelativeYaw = Double.parseDouble(args[3]); } catch (NumberFormatException ignored) {}
+                if (args.length >= 5) try { ttRelativePitch = Double.parseDouble(args[4]); } catch (NumberFormatException ignored) {}
+                if (ttRootLocation == null) {
+                    ttRootLocation = player.getLocation().clone();
+                    ttRootLocation.setPitch(0.0f);
+                    ttRootLocation.setYaw(0.0f);
+                }
+                refreshTestMarkers(player);
+                sendTestValues(player);
+                return;
+        }
+    }
+
+    private void sendTestTransformUsage(Player player) {
+        player.sendMessage("§b=== Test Transform Commands ===");
+        player.sendMessage("§e/bde test_transform set <vYaw> <vPitch> <rYaw> <rPitch>");
+        player.sendMessage("§7  Set values and spawn/update markers");
+        player.sendMessage("§e/bde test_transform animate <field> <delta> <seconds>");
+        player.sendMessage("§7  Smoothly animate a field. Fields: vyaw, vpitch, ryaw, rpitch");
+        player.sendMessage("§7  Example: animate vyaw 360 10 → full rotation over 10s");
+        player.sendMessage("§e/bde test_transform stop §7— pause animation");
+        player.sendMessage("§e/bde test_transform reset §7— reset all values to 0");
+        player.sendMessage("§e/bde test_transform status §7— show current values");
+        player.sendMessage("§e/bde test_transform clear §7— remove all markers and reset");
+    }
+
+    private void sendTestValues(Player player) {
+        player.sendMessage("§b=== Current Transform Values ===");
+        player.sendMessage("§fVehicle Yaw/Pitch: §7" + String.format("%.2f", ttVehicleYaw) + " / " + String.format("%.2f", ttVehiclePitch));
+        player.sendMessage("§fAiming Yaw/Pitch:  §7" + String.format("%.2f", ttRelativeYaw) + " / " + String.format("%.2f", ttRelativePitch));
+        if (ttRootLocation != null) {
+            player.sendMessage("§eRoot: §f" + fmt(ttRootLocation));
+        }
+        if (ttMarkerPivot != null && ttMarkerPivot.isValid()) {
+            player.sendMessage("§3Pivot: §f" + fmt(ttMarkerPivot.getLocation()));
+        }
+        if (ttMarkerSeat != null && ttMarkerSeat.isValid()) {
+            player.sendMessage("§c Seat: §e" + fmt(ttMarkerSeat.getLocation()));
+        }
+        if (ttMarkerMuzzle != null && ttMarkerMuzzle.isValid()) {
+            player.sendMessage("§6Muzzle: §e" + fmt(ttMarkerMuzzle.getLocation()));
+        }
+    }
+
+    private void startTestAnimation(Player player) {
+        // Ensure markers exist
+        ensureTestMarkers(player);
+
+        ttAnimTask = new org.bukkit.scheduler.BukkitRunnable() {
+            @Override
+            public void run() {
+                if (ttAnimTicksRemaining <= 0) {
+                    // Animation complete — stop all per-tick increments
+                    ttAnimVYawPerTick = ttAnimVPitchPerTick = ttAnimRYawPerTick = ttAnimRPitchPerTick = 0.0;
+                    stopTestAnimation();
+                    player.sendMessage("§aAnimation complete.");
+                    sendTestValues(player);
+                    return;
+                }
+
+                // Apply increments
+                ttVehicleYaw += ttAnimVYawPerTick;
+                ttVehiclePitch += ttAnimVPitchPerTick;
+                ttRelativeYaw += ttAnimRYawPerTick;
+                ttRelativePitch += ttAnimRPitchPerTick;
+                ttAnimTicksRemaining--;
+
+                // Clamp pitch to [-90, 90] range
+                ttVehiclePitch = Math.max(-90.0, Math.min(90.0, ttVehiclePitch));
+                ttRelativePitch = Math.max(-90.0, Math.min(90.0, ttRelativePitch));
+
+                // Wrap yaw to [-180, 180]
+                ttVehicleYaw = wrapAngle(ttVehicleYaw);
+                ttRelativeYaw = wrapAngle(ttRelativeYaw);
+
+                // Recalculate and teleport markers
+                updateTestMarkerPositions();
+            }
+        }.runTaskTimer(plugin, 0L, 1L);
+    }
+
+    private void stopTestAnimation() {
+        if (ttAnimTask != null) {
+            ttAnimTask.cancel();
+            ttAnimTask = null;
+        }
+        ttAnimVYawPerTick = ttAnimVPitchPerTick = ttAnimRYawPerTick = ttAnimRPitchPerTick = 0.0;
+        ttAnimTicksRemaining = 0;
+    }
+
+    private void removeTestMarkers() {
+        if (ttMarkerRoot != null && ttMarkerRoot.isValid()) ttMarkerRoot.remove();
+        if (ttMarkerPivot != null && ttMarkerPivot.isValid()) ttMarkerPivot.remove();
+        if (ttMarkerSeat != null && ttMarkerSeat.isValid()) ttMarkerSeat.remove();
+        if (ttMarkerMuzzle != null && ttMarkerMuzzle.isValid()) ttMarkerMuzzle.remove();
+        ttMarkerRoot = ttMarkerPivot = ttMarkerSeat = ttMarkerMuzzle = null;
+
+        // Also clean up any orphaned tagged entities
+        if (ttRootLocation != null) {
+            for (org.bukkit.entity.Entity e : ttRootLocation.getWorld().getEntities()) {
+                if (e.getScoreboardTags().contains("bde_test_transform")) {
+                    e.remove();
+                }
+            }
+        }
+    }
+
+    private void ensureTestMarkers(Player player) {
+        if (ttRootLocation == null) {
+            ttRootLocation = player.getLocation().clone();
+            ttRootLocation.setPitch(0.0f);
+            ttRootLocation.setYaw(0.0f);
+        }
+
+        if (ttMarkerRoot == null || !ttMarkerRoot.isValid()) {
+            ttMarkerRoot = spawnTestMarker(ttRootLocation, Material.GRAY_CONCRETE, 0.5f, "Vehicle Root");
+        }
+        if (ttMarkerPivot == null || !ttMarkerPivot.isValid()) {
+            ttMarkerPivot = spawnTestMarker(ttRootLocation, Material.LIGHT_BLUE_CONCRETE, 0.3f, "Pivot Point");
+        }
+        if (ttMarkerSeat == null || !ttMarkerSeat.isValid()) {
+            ttMarkerSeat = spawnTestMarker(ttRootLocation, Material.RED_CONCRETE, 0.35f, "Spectator Seat");
+        }
+        if (ttMarkerMuzzle == null || !ttMarkerMuzzle.isValid()) {
+            ttMarkerMuzzle = spawnTestMarker(ttRootLocation, Material.GOLD_BLOCK, 0.3f, "Muzzle (0,0,2)");
+        }
+    }
+
+    private void refreshTestMarkers(Player player) {
+        ensureTestMarkers(player);
+        updateTestMarkerPositions();
+    }
+
+    private void updateTestMarkerPositions() {
+        if (ttRootLocation == null) return;
+
+        List<Double> mountOffset = Arrays.asList(2.0, 1.0, -3.0);
+        List<Double> passengerOffset = Arrays.asList(0.0, 0.5, 1.0);
+        List<Double> pivotOffset = Arrays.asList(0.5, 0.0, -0.5);
+        List<Double> componentOffset = Arrays.asList(0.0, 0.0, 2.0);
+        double scale = 2.0;
+        double frontYawOffset = 0.0;
+
+        Location seatLoc = top.sanscraft.bde.manager.ModelTransformEngine.getSubsystemSeatPosition(
+            ttRootLocation, mountOffset, passengerOffset, pivotOffset,
+            scale, frontYawOffset, ttVehicleYaw, ttVehiclePitch, ttRelativeYaw, ttRelativePitch
+        );
+
+        Location compLoc = top.sanscraft.bde.manager.ModelTransformEngine.getSubsystemComponentPosition(
+            ttRootLocation, mountOffset, componentOffset, null,
+            scale, frontYawOffset, ttVehicleYaw, ttVehiclePitch, ttRelativeYaw, ttRelativePitch, pivotOffset
+        );
+
+        Location pivotLoc = top.sanscraft.bde.manager.ModelTransformEngine.getSubsystemSeatPosition(
+            ttRootLocation, mountOffset, pivotOffset, pivotOffset,
+            scale, frontYawOffset, ttVehicleYaw, ttVehiclePitch, 0.0, 0.0
+        );
+
+        // Teleport markers
+        if (ttMarkerRoot != null && ttMarkerRoot.isValid()) ttMarkerRoot.teleport(ttRootLocation);
+        if (ttMarkerPivot != null && ttMarkerPivot.isValid()) ttMarkerPivot.teleport(pivotLoc);
+        if (ttMarkerSeat != null && ttMarkerSeat.isValid()) ttMarkerSeat.teleport(seatLoc);
+        if (ttMarkerMuzzle != null && ttMarkerMuzzle.isValid()) ttMarkerMuzzle.teleport(compLoc);
+    }
+
+    private double wrapAngle(double angle) {
+        angle = angle % 360.0;
+        if (angle > 180.0) angle -= 360.0;
+        if (angle <= -180.0) angle += 360.0;
+        return angle;
+    }
+
+    private org.bukkit.entity.BlockDisplay spawnTestMarker(Location loc, Material material, float markerScale, String label) {
+        org.bukkit.entity.BlockDisplay display = loc.getWorld().spawn(loc, org.bukkit.entity.BlockDisplay.class);
+        display.setBlock(material.createBlockData());
+        float half = markerScale / 2.0f;
+        org.bukkit.util.Transformation t = new org.bukkit.util.Transformation(
+            new org.joml.Vector3f(-half, -half, -half),
+            new org.joml.Quaternionf(),
+            new org.joml.Vector3f(markerScale, markerScale, markerScale),
+            new org.joml.Quaternionf()
+        );
+        display.setTransformation(t);
+        display.setGlowing(true);
+        display.addScoreboardTag("bde_test_transform");
+        display.setCustomName("§e" + label);
+        display.setCustomNameVisible(true);
+        display.setGravity(false);
+        return display;
+    }
+
+    private String fmt(Location loc) {
+        return String.format("%.4f, %.4f, %.4f", loc.getX(), loc.getY(), loc.getZ());
     }
 
     private void collectFiles(File dir, String currentPath, List<String> list) {

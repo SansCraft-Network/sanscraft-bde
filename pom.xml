@@ -14,7 +14,7 @@
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
-        <paper.version>1.21.1-R0.1-SNAPSHOT</paper.version>
+        <paper.version>1.21.4-R0.1-SNAPSHOT</paper.version>
         <api.version>1.21</api.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
@@ -34,13 +34,7 @@
             <version>${paper.version}</version>
             <scope>provided</scope>
         </dependency>
-        <!-- SansCraft Connector API -->
-        <dependency>
-            <groupId>top.sanscraft</groupId>
-            <artifactId>sanscraft-connector</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
-            <scope>provided</scope>
-        </dependency>
+
         <!-- Netty for packet interception -->
         <dependency>
             <groupId>io.netty</groupId>

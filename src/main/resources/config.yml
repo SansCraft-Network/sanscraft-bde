@@ -1,7 +1,7 @@
 # SansCraft Block Display Engine Integration Config
 
 # BDE Server API Endpoint
-api-endpoint: "https://block-display.com/server-api/"
+api-endpoint: "https://block-display.com/server-api"
 
 # How long to cache downloaded models locally in minutes (1440 = 24 hours)
 cache-duration-minutes: 1440
@@ -26,3 +26,11 @@ blockbench:
 gui:
   # The item used to select and edit BDE models in-game
   selector-tool: "BLAZE_ROD"
+
+# Default Block Traction Values (0.0 = no traction/fully slippery/infinite drift, 1.0 = perfect traction/instant turns)
+block-traction:
+  BLUE_ICE: 0.02
+  PACKED_ICE: 0.05
+  ICE: 0.1
+  SLIME_BLOCK: 0.2
+  SOUL_SAND: 0.4

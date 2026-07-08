@@ -46,6 +46,10 @@ public class SansCraftBDEPlugin extends JavaPlugin {
         getCommand("bde").setExecutor(bdeCommand);
         getCommand("bde").setTabCompleter(bdeCommand);
 
+        top.sanscraft.bde.command.LockCommand lockCommand = new top.sanscraft.bde.command.LockCommand(this);
+        getCommand("lock").setExecutor(lockCommand);
+        getCommand("lock").setTabCompleter(lockCommand);
+
         getServer().getPluginManager().registerEvents(new CustomBlockListener(this), this);
         getServer().getPluginManager().registerEvents(new top.sanscraft.bde.listener.BdeGuiListener(this), this);
 

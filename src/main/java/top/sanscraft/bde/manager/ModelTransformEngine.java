@@ -130,8 +130,8 @@ public class ModelTransformEngine {
             sx = tempX;
         }
 
-        // Rotate seatOffset by vehicleRootLoc yaw (Minecraft yaw: clockwise, so rotate by -yaw)
-        double yawRad = Math.toRadians(-vehicleRootLoc.getYaw());
+        // Rotate seatOffset by vehicleRootLoc yaw
+        double yawRad = Math.toRadians(vehicleRootLoc.getYaw());
         double cos = Math.cos(yawRad);
         double sin = Math.sin(yawRad);
 
@@ -171,7 +171,7 @@ public class ModelTransformEngine {
             rx = tempX;
         }
 
-        double yawRad = Math.toRadians(-vehicleRootLoc.getYaw());
+        double yawRad = Math.toRadians(vehicleRootLoc.getYaw());
         double cos = Math.cos(yawRad);
         double sin = Math.sin(yawRad);
 
@@ -179,5 +179,146 @@ public class ModelTransformEngine {
         double rotZ = rx * sin + rz * cos;
 
         return vehicleRootLoc.clone().add(rotX, ry, rotZ);
+    }
+
+    /**
+     * Calculates the world location of a subsystem component (camera or launch point)
+     * by applying vehicle root, mounting, and subsystem aim rotations.
+     */
+    public static Location getSubsystemComponentPosition(Location vehicleRootLoc, List<Double> mountOffset, List<Double> componentOffset, List<Double> driverSeatOffset, double scale, double frontYawOffset, double vehicleYaw, double vehiclePitch, double relativeYaw, double relativePitch) {
+        return getSubsystemComponentPosition(vehicleRootLoc, mountOffset, componentOffset, driverSeatOffset, scale, frontYawOffset, vehicleYaw, vehiclePitch, relativeYaw, relativePitch, null);
+    }
+
+    public static Location getSubsystemComponentPosition(Location vehicleRootLoc, List<Double> mountOffset, List<Double> componentOffset, List<Double> driverSeatOffset, double scale, double frontYawOffset, double vehicleYaw, double vehiclePitch, double relativeYaw, double relativePitch, List<Double> pivotOffset) {
+        Matrix4f mPass = new Matrix4f();
+
+        // 1. Initial vehicle root rotation
+        mPass.rotateY((float) Math.toRadians(-vehicleYaw));
+        mPass.rotateX((float) Math.toRadians(vehiclePitch));
+
+        if (frontYawOffset != 0.0) {
+            mPass.rotateY((float) Math.toRadians(frontYawOffset));
+        }
+
+        // 2. Go to vehicle origin
+        if (driverSeatOffset != null && driverSeatOffset.size() == 3) {
+            float sx = (float) (driverSeatOffset.get(0) * scale);
+            float sy = (float) (driverSeatOffset.get(1) * scale);
+            float sz = (float) (driverSeatOffset.get(2) * scale);
+            mPass.translate(-sx, -sy, -sz);
+        }
+
+        // 3. Go to mount offset
+        if (mountOffset != null && mountOffset.size() == 3) {
+            float mx = (float) (mountOffset.get(0) * scale);
+            float my = (float) (mountOffset.get(1) * scale);
+            float mz = (float) (mountOffset.get(2) * scale);
+            mPass.translate(mx, my, mz);
+        }
+
+        // 4. Translate by pivot offset
+        float px = 0.0f;
+        float py = 0.0f;
+        float pz = 0.0f;
+        boolean hasPivot = pivotOffset != null && pivotOffset.size() == 3;
+        if (hasPivot) {
+            px = (float) (pivotOffset.get(0) * scale);
+            py = (float) (pivotOffset.get(1) * scale);
+            pz = (float) (pivotOffset.get(2) * scale);
+            mPass.translate(px, py, pz);
+        }
+
+        // 5. Rotate by subsystem relative aiming yaw and pitch
+        mPass.rotateY((float) Math.toRadians(-relativeYaw));
+        mPass.rotateX((float) Math.toRadians(relativePitch));
+
+        // 6. Translate back by pivot offset
+        if (hasPivot) {
+            mPass.translate(-px, -py, -pz);
+        }
+
+        // 7. Translate by component offset (cameraOffset or launchOffset)
+        if (componentOffset != null && componentOffset.size() == 3) {
+            float cx = (float) (componentOffset.get(0) * scale);
+            float cy = (float) (componentOffset.get(1) * scale);
+            float cz = (float) (componentOffset.get(2) * scale);
+            mPass.translate(cx, cy, cz);
+        }
+
+        // Decompose to position
+        Vector3f pos = new Vector3f();
+        mPass.getTranslation(pos);
+
+        return vehicleRootLoc.clone().add(pos.x, pos.y, pos.z);
+    }
+
+    /**
+     * Calculates the world location of a passenger/spectator seat mounted on a subsystem,
+     * rotating around the subsystem's pivot point.
+     */
+    public static Location getSubsystemSeatPosition(
+        Location vehicleRootLoc,
+        List<Double> mountOffset,
+        List<Double> passengerOffset,
+        List<Double> pivotOffset,
+        double scale,
+        double frontYawOffset,
+        double vehicleYaw,
+        double vehiclePitch,
+        double relativeYaw,
+        double relativePitch
+    ) {
+        Matrix4f mPass = new Matrix4f();
+
+        // 1. Initial vehicle root rotation
+        mPass.rotateY((float) Math.toRadians(-vehicleYaw));
+        mPass.rotateX((float) Math.toRadians(vehiclePitch));
+
+        if (frontYawOffset != 0.0) {
+            mPass.rotateY((float) Math.toRadians(frontYawOffset));
+        }
+
+        // 2. Go to mount offset (pivot connection point on vehicle)
+        if (mountOffset != null && mountOffset.size() == 3) {
+            float mx = (float) (mountOffset.get(0) * scale);
+            float my = (float) (mountOffset.get(1) * scale);
+            float mz = (float) (mountOffset.get(2) * scale);
+            mPass.translate(mx, my, mz);
+        }
+
+        // 3. Translate to pivot
+        float px = 0.0f;
+        float py = 0.0f;
+        float pz = 0.0f;
+        boolean hasPivot = pivotOffset != null && pivotOffset.size() == 3;
+        if (hasPivot) {
+            px = (float) (pivotOffset.get(0) * scale);
+            py = (float) (pivotOffset.get(1) * scale);
+            pz = (float) (pivotOffset.get(2) * scale);
+            mPass.translate(px, py, pz);
+        }
+
+        // 4. Rotate by subsystem relative aiming angles
+        mPass.rotateY((float) Math.toRadians(-relativeYaw));
+        mPass.rotateX((float) Math.toRadians(relativePitch));
+
+        // 5. Translate back by pivot offset
+        if (hasPivot) {
+            mPass.translate(-px, -py, -pz);
+        }
+
+        // 6. Translate by passenger offset
+        if (passengerOffset != null && passengerOffset.size() == 3) {
+            float sx = (float) (passengerOffset.get(0) * scale);
+            float sy = (float) (passengerOffset.get(1) * scale);
+            float sz = (float) (passengerOffset.get(2) * scale);
+            mPass.translate(sx, sy, sz);
+        }
+
+        // Decompose to position
+        Vector3f pos = new Vector3f();
+        mPass.getTranslation(pos);
+
+        return vehicleRootLoc.clone().add(pos.x, pos.y, pos.z);
     }
 }

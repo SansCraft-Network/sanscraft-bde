@@ -13,6 +13,8 @@ public class BdeGuiHolder implements InventoryHolder {
     private int page = 0;
 
     private Integer seatIndex;
+    private Integer subsystemIndex;
+    private Integer weaponModeIndex;
 
     public BdeGuiHolder(GuiType guiType, UUID selectedModelId) {
         this(guiType, selectedModelId, null);
@@ -31,12 +33,37 @@ public class BdeGuiHolder implements InventoryHolder {
         this.seatIndex = seatIndex;
     }
 
+    public BdeGuiHolder(GuiType guiType, UUID selectedModelId, String modelProjectId, Integer seatIndex, Integer subsystemIndex, Integer weaponModeIndex) {
+        this.guiType = guiType;
+        this.selectedModelId = selectedModelId;
+        this.modelProjectId = modelProjectId;
+        this.seatIndex = seatIndex;
+        this.subsystemIndex = subsystemIndex;
+        this.weaponModeIndex = weaponModeIndex;
+    }
+
     public Integer getSeatIndex() {
         return seatIndex;
     }
 
     public void setSeatIndex(Integer seatIndex) {
         this.seatIndex = seatIndex;
+    }
+
+    public Integer getSubsystemIndex() {
+        return subsystemIndex;
+    }
+
+    public void setSubsystemIndex(Integer subsystemIndex) {
+        this.subsystemIndex = subsystemIndex;
+    }
+
+    public Integer getWeaponModeIndex() {
+        return weaponModeIndex;
+    }
+
+    public void setWeaponModeIndex(Integer weaponModeIndex) {
+        this.weaponModeIndex = weaponModeIndex;
     }
 
     public GuiType getGuiType() {
@@ -74,6 +101,12 @@ public class BdeGuiHolder implements InventoryHolder {
         VEHICLES_CATALOG,
         SEAT_SELECTION,
         SEAT_CONFIGURATION,
-        SEAT_DETAIL
+        SEAT_DETAIL,
+        GENERAL_BLOCK_TRACTION,
+        VEHICLE_BLOCK_OVERRIDES,
+        SUBSYSTEM_LIST,
+        SUBSYSTEM_DETAIL,
+        WEAPON_MODE_LIST,
+        WEAPON_MODE_DETAIL
     }
 }
