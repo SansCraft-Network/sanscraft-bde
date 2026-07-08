@@ -34,10 +34,11 @@ jobs:
           mkdir -p dist
           mv target/sanscraft-bde-*.jar dist/sanscraft-bde-modern.jar
 
-      - name: Build Legacy JAR
-        run: |
-          mvn -B clean package -Plegacy
-          mv target/sanscraft-bde-*.jar dist/sanscraft-bde-legacy.jar
+      # Legacy JAR build is temporarily suspended to focus priorities on other critical bugs.
+      # - name: Build Legacy JAR
+      #   run: |
+      #     mvn -B clean package -Plegacy
+      #     mv target/sanscraft-bde-*.jar dist/sanscraft-bde-legacy.jar
 
       - name: Get current date
         id: date
@@ -61,6 +62,5 @@ jobs:
           prerelease: false
           files: |
             dist/sanscraft-bde-modern.jar
-            dist/sanscraft-bde-legacy.jar
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

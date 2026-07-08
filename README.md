@@ -2,7 +2,7 @@
 
 [![Build & Release](https://github.com/SansCraft-Network/sanscraft-bde/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/SansCraft-Network/sanscraft-bde/actions/workflows/build-and-release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Target: Paper 1.20.4 - 1.21.1+](https://img.shields.io/badge/Minecraft-Paper%201.20.4--1.21.1%2B-blue.svg)](https://papermc.io/)
+[![Target: Paper 1.21.11+](https://img.shields.io/badge/Minecraft-Paper%201.21.11%2B-blue.svg)](https://papermc.io/)
 
 SansCraftBDE is a high-performance Paper/Spigot plugin that introduces detailed 3D models made entirely of Minecraft Block, Item, and Text Display entities. Featuring a fully steerable physical vehicle engine, customizable multi-seat mounting mechanics, voxelizing model converters, and a custom block placement framework, SansCraftBDE allows server creators to build immersive 3D gameplay without client-side mods or resource pack overhead.
 
@@ -292,23 +292,21 @@ The converted models are stored in JSON format using passenger arrangements:
 
 Ensure you have Maven installed and Java Development Kit (JDK) configured.
 
-- **Modern Build Profile** (Java 21, Paper 1.21.1+):
+- **Modern Build Profile** (Java 21, Paper 1.21.11+):
   ```bash
   mvn clean package
   ```
   Produces `target/sanscraft-bde-1.0.0-SNAPSHOT.jar` targeting Java 21 bytecode.
 
-- **Legacy Build Profile** (Java 17, Paper 1.20.4+):
-  ```bash
-  mvn clean package -Plegacy
-  ```
-  Produces `target/sanscraft-bde-1.0.0-SNAPSHOT.jar` targeting Java 17 bytecode.
+> [!WARNING]
+> **Legacy Build Profile** (Java 17, Paper 1.20.4 - 1.21.11):
+> Support for the legacy build profile (`-Plegacy`) has been **temporarily dropped** so we can focus resources on resolving other critical bugs. We plan to re-enable and update legacy compatibility in a future release.
 
 ### Continuous Integration Workflow
 
 The project uses GitHub Actions to run automated testing and package compilation.
 - **Location**: `.github/workflows/build-and-release.yml`
-- **Behavior**: On pushes or pull requests to the `main` branch, the workflow compiles both target build profiles (modern and legacy), runs test checks, and drafts a release containing both JAR artifacts.
+- **Behavior**: On pushes to the `main` branch, the workflow compiles the modern target build profile, runs checks, and drafts a release containing the compiled JAR artifact.
 
 ---
 
