@@ -7,8 +7,82 @@ description: Block Display Engine and 3D Model integration plugin for SansCraft
 commands:
   bde:
     description: Core command for block display engine and custom blocks
-    permission: sanscraft.bde.admin
+    permission: sanscraft.bde
     aliases: [blockdisplay]
   lock:
     description: Lock X, Y, or Z axis coordinates during interactive subsystem placement
-    permission: sanscraft.bde.admin
+    permission: sanscraft.bde.lock
+
+permissions:
+  sanscraft.bde.admin:
+    description: Grants access to all admin BDE commands.
+    default: op
+    children:
+      sanscraft.bde: true
+      sanscraft.bde.lock: true
+      sanscraft.bde.spawn: true
+      sanscraft.bde.vehicles: true
+      sanscraft.bde.move: true
+      sanscraft.bde.remove: true
+      sanscraft.bde.list: true
+      sanscraft.bde.animate: true
+      sanscraft.bde.convert: true
+      sanscraft.bde.block: true
+      sanscraft.bde.select: true
+      sanscraft.bde.deselect: true
+      sanscraft.bde.rotate: true
+      sanscraft.bde.gui: true
+      sanscraft.bde.traction: true
+      sanscraft.bde.debug: true
+      sanscraft.bde.test_transform: true
+  sanscraft.bde:
+    description: Permission to use the core command for block display engine
+    default: op
+  sanscraft.bde.lock:
+    description: Permission to lock coordinates during interactive subsystem placement
+    default: op
+  sanscraft.bde.spawn:
+    description: Permission to spawn models
+    default: op
+  sanscraft.bde.vehicles:
+    description: Permission to open the vehicles menu
+    default: op
+  sanscraft.bde.move:
+    description: Permission to move a spawned model
+    default: op
+  sanscraft.bde.remove:
+    description: Permission to remove a spawned model
+    default: op
+  sanscraft.bde.list:
+    description: Permission to list all spawned models
+    default: op
+  sanscraft.bde.animate:
+    description: Permission to anime a spawned model
+    default: op
+  sanscraft.bde.convert:
+    description: Permission to convert a file to a model
+    default: op
+  sanscraft.bde.block:
+    description: Permission to obtain or edit a custom block
+    default: op
+  sanscraft.bde.select:
+    description: Permission to select a spawned model
+    default: op
+  sanscraft.bde.deselect:
+    description: Permission to deselect a spawned model
+    default: op
+  sanscraft.bde.rotate:
+    description: Permission to rotate a spawned model
+    default: op
+  sanscraft.bde.gui:
+    description: Permission to open the GUI
+    default: op
+  sanscraft.bde.traction:
+    description: Permission to enable or disable traction
+    default: op
+  sanscraft.bde.debug:
+    description: Permission to enable or disable debug
+    default: op
+  sanscraft.bde.test_transform:
+    description: Permission to run test_transform
+    default: op

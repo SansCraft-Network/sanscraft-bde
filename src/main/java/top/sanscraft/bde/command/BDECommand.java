@@ -39,7 +39,7 @@ public class BDECommand implements CommandExecutor, TabCompleter {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (!sender.hasPermission("sanscraft.bde.admin")) {
+        if (!sender.hasPermission("sanscraft.bde")) {
             sender.sendMessage(ChatColor.RED + "You do not have permission to execute this command.");
             return true;
         }
@@ -109,6 +109,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
     private void handleSpawn(CommandSender sender, String[] args) {
         if (!(sender instanceof Player)) {
             sender.sendMessage(ChatColor.RED + "Only players can run this subcommand.");
+            return;
+        }
+
+        if (!(sender.hasPermission("sanscraft.bde.spawn"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to spawn models.");
             return;
         }
 
@@ -224,6 +229,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
             sender.sendMessage(ChatColor.RED + "Only players can run this subcommand.");
             return;
         }
+
+        if (!(sender.hasPermission("sanscraft.bde.vehicles"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to open the Vehicles Catalog.");
+            return;
+        }
         Player player = (Player) sender;
         plugin.getBdeGuiManager().openVehiclesCatalog(player, null);
     }
@@ -231,6 +241,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
     private void handleMove(CommandSender sender, String[] args) {
         if (!(sender instanceof Player)) {
             sender.sendMessage(ChatColor.RED + "Only players can run this subcommand.");
+            return;
+        }
+
+        if (!(sender.hasPermission("sanscraft.bde.move"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to move models.");
             return;
         }
 
@@ -291,6 +306,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
             return;
         }
 
+        if (!(sender.hasPermission("sanscraft.bde.remove"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to remove models.");
+            return;
+        }
+
         Player player = (Player) sender;
         ModelInstance nearest = findNearestModel(player.getLocation(), 6.0);
         if (nearest == null) {
@@ -303,6 +323,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
     }
 
     private void handleList(CommandSender sender) {
+        if (!(sender.hasPermission("sanscraft.bde.list"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to list spawned models.");
+            return;
+        }
+
         Map<UUID, ModelInstance> active = plugin.getModelManager().getActiveInstances();
         if (active.isEmpty()) {
             sender.sendMessage(ChatColor.YELLOW + "No active BDE models currently spawned.");
@@ -326,6 +351,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
     private void handleAnim(CommandSender sender, String[] args) {
         if (!(sender instanceof Player)) {
             sender.sendMessage(ChatColor.RED + "Only players can run this subcommand.");
+            return;
+        }
+
+        if (!(sender.hasPermission("sanscraft.bde.animate"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to animate models.");
             return;
         }
 
@@ -389,6 +419,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
     }
 
     private void handleConvert(CommandSender sender, String[] args) {
+        if (!(sender.hasPermission("sanscraft.bde.convert"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to convert models.");
+            return;
+        }
+
         if (args.length < 3) {
             sender.sendMessage(ChatColor.RED + "Usage: /bde convert <blockbench|vox|gltf|glb|obj> <file> [resolution_factor/density] [target_size_blocks] [max_displays_cap]");
             return;
@@ -476,6 +511,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
     }
 
     private void handleBlock(CommandSender sender, String[] args) {
+        if (!(sender.hasPermission("sanscraft.bde.block"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to use custom blocks.");
+            return;
+        }
+
         if (args.length < 2) {
             sender.sendMessage(ChatColor.RED + "Usage: /bde block give ... or /bde block link ...");
             return;
@@ -569,6 +609,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
             return;
         }
 
+        if (!(sender.hasPermission("sanscraft.bde.select"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to select models.");
+            return;
+        }
+
         Player player = (Player) sender;
         ModelInstance nearest = findNearestModel(player.getLocation(), 6.0);
         if (nearest == null) {
@@ -582,6 +627,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
     private void handleDeselect(CommandSender sender) {
         if (!(sender instanceof Player)) {
             sender.sendMessage(ChatColor.RED + "Only players can deselect models.");
+            return;
+        }
+
+        if (!(sender.hasPermission("sanscraft.bde.deselect"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to deselect models.");
             return;
         }
 
@@ -599,6 +649,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
     private void handleRotate(CommandSender sender, String[] args) {
         if (!(sender instanceof Player)) {
             sender.sendMessage(ChatColor.RED + "Only players can rotate models.");
+            return;
+        }
+
+        if (!(sender.hasPermission("sanscraft.bde.rotate"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to rotate models.");
             return;
         }
 
@@ -634,6 +689,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
             return;
         }
 
+        if (!(sender.hasPermission("sanscraft.bde.gui"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to open the GUI.");
+            return;
+        }
+
         Player player = (Player) sender;
         UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
         if (selectedId == null) {
@@ -654,6 +714,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
     private void handleTraction(CommandSender sender) {
         if (!(sender instanceof Player)) {
             sender.sendMessage(ChatColor.RED + "Only players can run this subcommand.");
+            return;
+        }
+
+        if (!(sender.hasPermission("sanscraft.bde.spawn"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to adjust model traction.");
             return;
         }
         Player player = (Player) sender;
@@ -808,6 +873,10 @@ public class BDECommand implements CommandExecutor, TabCompleter {
 
 
     private void handleDebug(CommandSender sender, String[] args) {
+        if (!(sender.hasPermission("sanscraft.bde.debug"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to use debug.");
+            return;
+        }
         ModelManager.DEBUG_VEHICLES = !ModelManager.DEBUG_VEHICLES;
         sender.sendMessage(ChatColor.GREEN + "Vehicle debugging has been " + (ModelManager.DEBUG_VEHICLES ? "ENABLED" : "DISABLED") + ".");
     }
@@ -838,6 +907,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
     private void handleTestTransform(CommandSender sender, String[] args) {
         if (!(sender instanceof Player)) {
             sender.sendMessage(ChatColor.RED + "Only players can run this subcommand.");
+            return;
+        }
+
+        if (!(sender.hasPermission("sanscraft.bde.testtransform"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to use test_transform.");
             return;
         }
 
