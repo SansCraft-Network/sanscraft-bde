@@ -3,9 +3,12 @@ version: 1.0.0-SNAPSHOT
 main: top.sanscraft.bde.SansCraftBDEPlugin
 api-version: '${api.version}'
 description: Block Display Engine and 3D Model integration plugin for SansCraft
-depend: [SansCraftConnector]
+
 commands:
   bde:
     description: Core command for block display engine and custom blocks
     permission: sanscraft.bde.admin
     aliases: [blockdisplay]
+  lock:
+    description: Lock X, Y, or Z axis coordinates during interactive subsystem placement
+    permission: sanscraft.bde.admin

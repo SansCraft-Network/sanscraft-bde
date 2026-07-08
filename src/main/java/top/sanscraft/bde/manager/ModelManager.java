@@ -35,6 +35,9 @@ import java.nio.file.Files;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import org.bukkit.util.RayTraceResult;
+import net.kyori.adventure.text.Component;
 import top.sanscraft.bde.model.ModelInstance;
 
 public class ModelManager {
@@ -110,10 +113,56 @@ public class ModelManager {
 
     private final PlayerInputTracker inputTracker;
 
+    private final List<CustomProjectile> activeProjectiles = new ArrayList<>();
+    private final Map<UUID, LockSession> activeLockSessions = new HashMap<>(); // key: playerId -> LockSession
+    private final Map<UUID, Map<String, Long>> subsystemCooldowns = new HashMap<>(); // key: playerId -> (subsystemName -> lastUseTimestamp)
+    private final Map<UUID, ItemStack> originalHotbarItems = new HashMap<>();
+
+    public enum PlacementStep {
+        PIVOT_OFFSET,
+        MOUNT_POINT,
+        LAUNCH_POINT,
+        CAMERA_OFFSET
+    }
+
+    public static class PlacementSession {
+        public final UUID originalInstanceId;
+        public UUID instanceId;
+        public final int subsystemIndex;
+        public PlacementStep step;
+        public double distance = 4.0;
+        public final java.util.Set<String> lockedAxes = new java.util.HashSet<>();
+        public final java.util.Map<String, Double> lockedValues = new java.util.HashMap<>();
+        public double lastRx = 0.0;
+        public double lastRy = 0.0;
+        public double lastRz = 0.0;
+
+        public UUID tempSubsystemInstanceId = null;
+        public Location subsystemOriginWorldLoc = null;
+        public Location vehicleOriginalLoc = null;
+        public double vehicleOriginalScale = 1.0;
+        public String vehicleModelId = null;
+
+        public PlacementSession(UUID instanceId, int subsystemIndex) {
+            this.originalInstanceId = instanceId;
+            this.instanceId = instanceId;
+            this.subsystemIndex = subsystemIndex;
+            this.step = PlacementStep.PIVOT_OFFSET;
+        }
+    }
+
+    private final Map<UUID, PlacementSession> placementSessions = new ConcurrentHashMap<>();
+
+    public PlacementSession getPlacementSession(UUID playerId) {
+        return placementSessions.get(playerId);
+    }
+
     public ModelManager(SansCraftBDEPlugin plugin) {
         this.plugin = plugin;
         this.inputTracker = new PlayerInputTracker(plugin);
         startVehicleTick();
+        startProjectileTick();
+        runPlacementTickTask();
     }
 
     public PlayerInputTracker getInputTracker() {
@@ -142,7 +191,7 @@ public class ModelManager {
             }
 
             // Fetch from API
-            String apiEndpoint = plugin.getConfig().getString("api-endpoint", "https://block-display.com/server-api/");
+            String apiEndpoint = plugin.getConfig().getString("api-endpoint", "https://block-display.com/server-api");
             String url = apiEndpoint + "?id=" + id;
 
             HttpRequest request = HttpRequest.newBuilder()
@@ -150,7 +199,7 @@ public class ModelManager {
                     .GET()
                     .build();
 
-            httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+            sendAsyncWithRedirect(request, 0)
                     .thenAccept(response -> {
                         if (response.statusCode() == 200) {
                             try {
@@ -220,6 +269,29 @@ public class ModelManager {
         }
 
         return future;
+    }
+
+    private CompletableFuture<HttpResponse<String>> sendAsyncWithRedirect(HttpRequest request, int redirectCount) {
+        return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                .thenCompose(response -> {
+                    int status = response.statusCode();
+                    if ((status == 301 || status == 302 || status == 307 || status == 308) && redirectCount < 5) {
+                        Optional<String> locationOpt = response.headers().firstValue("Location");
+                        if (locationOpt.isPresent()) {
+                            try {
+                                URI redirectUri = request.uri().resolve(locationOpt.get());
+                                HttpRequest nextRequest = HttpRequest.newBuilder()
+                                        .uri(redirectUri)
+                                        .GET()
+                                        .build();
+                                return sendAsyncWithRedirect(nextRequest, redirectCount + 1);
+                            } catch (Exception e) {
+                                return CompletableFuture.failedFuture(e);
+                            }
+                        }
+                    }
+                    return CompletableFuture.completedFuture(response);
+                });
     }
 
     /**
@@ -339,28 +411,52 @@ public class ModelManager {
             vehicleRoot.addPassenger(driverSeat);
             instance.setDriverSeat(driverSeat);
 
-            Location hitboxLoc = ModelTransformEngine.getHitboxPosition(location, model, scale);
-            hitboxLoc.setYaw(location.getYaw());
-            root = location.getWorld().spawn(hitboxLoc, Interaction.class);
-            root.setInteractionWidth(radius * 2f);
-            root.setInteractionHeight(interactionHeight);
-            root.setGravity(false);
-            root.setInvulnerable(true);
-            root.addScoreboardTag("bde_root");
-            root.addScoreboardTag("bde_model_" + uuidStr);
-            root.setMetadata("bde_instance_id", new FixedMetadataValue(plugin, uuidStr));
+            // Determine hitbox configs (custom or dynamically generated)
+            List<BdeModel.HitboxConfig> hbConfigs = model.getVehicle() != null ? model.getVehicle().getHitboxes() : null;
+            if (hbConfigs == null || hbConfigs.isEmpty()) {
+                hbConfigs = generateDynamicHitboxes(model);
+            }
+            if (hbConfigs.isEmpty()) {
+                // Fallback to single default hitbox
+                BdeModel.HitboxConfig fallback = new BdeModel.HitboxConfig();
+                fallback.setOffset(model.getSeatOffset() != null ? model.getSeatOffset() : Arrays.asList(0.0, 0.0, 0.0));
+                fallback.setWidth(radius * 2f);
+                fallback.setHeight(interactionHeight);
+                hbConfigs.add(fallback);
+            }
+
+            for (BdeModel.HitboxConfig hc : hbConfigs) {
+                Location hbLoc = ModelTransformEngine.getSeatPosition(location, hc.getOffset(), model.getSeatOffset(), scale, model.getFrontYawOffset());
+                hbLoc.setYaw(location.getYaw());
+                Interaction hb = location.getWorld().spawn(hbLoc, Interaction.class);
+                hb.setInteractionWidth((float) (hc.getWidth() * scale));
+                hb.setInteractionHeight((float) (hc.getHeight() * scale));
+                hb.setGravity(false);
+                hb.setInvulnerable(true);
+                hb.addScoreboardTag("bde_root");
+                hb.addScoreboardTag("bde_model_" + uuidStr);
+                hb.setMetadata("bde_instance_id", new FixedMetadataValue(plugin, uuidStr));
+                
+                instance.getHitboxes().add(hb);
+                if (root == null) {
+                    root = hb;
+                }
+            }
             instance.setRootEntity(root);
 
             // Spawn co-passenger seat ArmorStands immediately
             List<List<Double>> pOffsets = model.getPassengerOffsets();
             if (pOffsets != null) {
                 for (int i = 0; i < pOffsets.size(); i++) {
-                    Location seatLoc = ModelTransformEngine.getSeatPosition(location, pOffsets.get(i), model.getSeatOffset(), scale, model.getFrontYawOffset());
                     double psYaw = 0.0;
                     if (model.getVehicle() != null && i < model.getVehicle().getPassengerSeats().size()) {
                         psYaw = model.getVehicle().getPassengerSeats().get(i).getYaw();
                     }
+                    
+                    // Spawn the actual riding seat ArmorStand
+                    Location seatLoc = ModelTransformEngine.getSeatPosition(location, pOffsets.get(i), model.getSeatOffset(), scale, model.getFrontYawOffset());
                     seatLoc.setYaw((float) ((location.getYaw() + psYaw) % 360.0));
+                    
                     org.bukkit.entity.ArmorStand seat = location.getWorld().spawn(seatLoc, org.bukkit.entity.ArmorStand.class);
                     seat.setInvisible(true);
                     seat.setMarker(true);
@@ -372,6 +468,7 @@ public class ModelManager {
                     seat.addScoreboardTag("bde_seat_" + i);
                     seat.addScoreboardTag("bde_model_" + uuidStr);
                     seat.setMetadata("bde_instance_id", new FixedMetadataValue(plugin, uuidStr));
+                    
                     instance.getPassengerSeats().add(seat);
                 }
             }
@@ -428,6 +525,10 @@ public class ModelManager {
                     // Mount display or teleport to absolute position
                     if (vehicleRoot != null) {
                         vehicleRoot.addPassenger(display);
+                        // Enable client-side smooth interpolation for teleports/rotations!
+                        display.setTeleportDuration(1);
+                        display.setInterpolationDuration(1);
+                        display.setInterpolationDelay(0);
                     } else {
                         display.teleport(location);
                     }
@@ -443,6 +544,75 @@ public class ModelManager {
         }
 
         activeInstances.put(instance.getId(), instance);
+
+        // Spawn mounted subsystem BDE models if configured
+        if (model.getVehicle() != null && model.getVehicle().getSubsystems() != null) {
+            for (int subIdx = 0; subIdx < model.getVehicle().getSubsystems().size(); subIdx++) {
+                BdeModel.SubsystemConfig sub = model.getVehicle().getSubsystems().get(subIdx);
+                if (sub.getBdeModelId() != null && !sub.getBdeModelId().isEmpty()) {
+                    try {
+                        BdeModel subModel = loadModelSync(sub.getBdeModelId());
+                        if (subModel != null && subModel.getPassengers() != null) {
+                            List<String> flatSubPassengers = new ArrayList<>();
+                            for (String pSnbt : subModel.getPassengers()) {
+                                List<String> split = splitObjects(pSnbt);
+                                for (String p : split) {
+                                    collectAllPassengers(p, flatSubPassengers);
+                                }
+                            }
+
+                            for (int i = 0; i < flatSubPassengers.size(); i++) {
+                                String passengerSnbt = flatSubPassengers.get(i);
+                                boolean isItemDisplay = isItemDisplaySnbt(passengerSnbt);
+                                boolean isTextDisplay = isTextDisplaySnbt(passengerSnbt);
+                                Display display;
+                                if (isItemDisplay) {
+                                    ItemDisplay itemDisplay = location.getWorld().spawn(location, ItemDisplay.class);
+                                    applyItemDisplayData(itemDisplay, passengerSnbt, scale);
+                                    display = itemDisplay;
+                                } else if (isTextDisplay) {
+                                    TextDisplay textDisplay = location.getWorld().spawn(location, TextDisplay.class);
+                                    applyTextDisplayData(textDisplay, passengerSnbt);
+                                    display = textDisplay;
+                                } else {
+                                    BlockDisplay blockDisplay = location.getWorld().spawn(location, BlockDisplay.class);
+                                    applyBlockDisplayData(blockDisplay, passengerSnbt, scale);
+                                    display = blockDisplay;
+                                }
+
+                                display.addScoreboardTag("bde_passenger");
+                                display.addScoreboardTag("bde_model_" + uuidStr);
+                                if (sub.getDisplayTag() != null) {
+                                    display.addScoreboardTag(sub.getDisplayTag());
+                                }
+
+                                // Set metadata to identify this as part of a subsystem model
+                                display.setMetadata("bde_subsystem_model_id", new FixedMetadataValue(plugin, sub.getBdeModelId()));
+                                display.setMetadata("bde_subsystem_index", new FixedMetadataValue(plugin, i));
+                                display.setMetadata("bde_subsystem_parent_index", new FixedMetadataValue(plugin, subIdx));
+
+                                // Initial transformation
+                                float mHeight = getMountHeight(vehicleRoot, interactionHeight);
+                                updateSubsystemTransform(display, scale, mHeight, model, (float) location.getYaw(), (float) location.getPitch(), location.getYaw(), 0.0, sub);
+
+                                if (vehicleRoot != null) {
+                                    vehicleRoot.addPassenger(display);
+                                    display.setTeleportDuration(1);
+                                    display.setInterpolationDuration(1);
+                                    display.setInterpolationDelay(0);
+                                } else {
+                                    display.teleport(location);
+                                }
+                                instance.addPassenger(display);
+                            }
+                        }
+                    } catch (Exception e) {
+                        plugin.getLogger().log(java.util.logging.Level.WARNING, "Failed to load subsystem BDE model: " + sub.getBdeModelId(), e);
+                    }
+                }
+            }
+        }
+
         return instance;
     }
 
@@ -926,21 +1096,28 @@ public class ModelManager {
         root.addScoreboardTag("bde_model_" + instance.getId().toString());
         root.setMetadata("bde_instance_id", new FixedMetadataValue(plugin, instance.getId().toString()));
         instance.setRootEntity(root);
+        instance.getHitboxes().add(root);
 
         updateModelTransforms(instance);
     }
 
     public void deactivateHitbox(ModelInstance instance) {
         if (instance.getModel().getVehicleStats() != null) return;
-        if (instance.getRootEntity() == null) return;
-
-        Entity root = instance.getRootEntity();
+        
         Location loc = instance.getLocation();
-
         instance.setCurrentLocation(loc);
 
-        root.remove();
-        instance.setRootEntity(null);
+        for (Interaction hb : instance.getHitboxes()) {
+            if (hb != null && hb.isValid()) {
+                hb.remove();
+            }
+        }
+        instance.getHitboxes().clear();
+
+        if (instance.getRootEntity() != null) {
+            instance.getRootEntity().remove();
+            instance.setRootEntity(null);
+        }
 
         updateModelTransforms(instance);
     }
@@ -963,14 +1140,173 @@ public class ModelManager {
         updateModelTransforms(instance);
     }
 
-    public void updateHitboxLocation(ModelInstance instance) {
-        Entity hitbox = instance.getRootEntity();
-        Entity vehicleRoot = instance.getVehicleRoot();
-        if (hitbox != null && hitbox.isValid() && vehicleRoot != null && vehicleRoot.isValid()) {
-            Location hitboxLoc = ModelTransformEngine.getHitboxPosition(vehicleRoot.getLocation(), instance.getModel(), instance.getScale());
-            hitboxLoc.setYaw(vehicleRoot.getLocation().getYaw());
-            hitbox.teleport(hitboxLoc);
+    public List<BdeModel.HitboxConfig> generateDynamicHitboxes(BdeModel model) {
+        List<BdeModel.HitboxConfig> hitboxes = new ArrayList<>();
+        if (model == null || model.getPassengers() == null) return hitboxes;
+
+        List<String> flatPassengers = new ArrayList<>();
+        for (String passengerSnbt : model.getPassengers()) {
+            List<String> split = splitObjects(passengerSnbt);
+            for (String p : split) {
+                collectAllPassengers(p, flatPassengers);
+            }
         }
+
+        List<Vector3f> translations = new ArrayList<>();
+        for (String snbt : flatPassengers) {
+            float[] m = new float[16];
+            int transIdx = snbt.indexOf("transformation:[");
+            if (transIdx != -1) {
+                int endTrans = snbt.indexOf("]", transIdx);
+                if (endTrans != -1) {
+                    String matrixStr = snbt.substring(transIdx + 16, endTrans);
+                    String[] parts = matrixStr.split(",");
+                    if (parts.length == 16) {
+                        for (int i = 0; i < 16; i++) {
+                            String p = parts[i].trim().toLowerCase();
+                            if (p.endsWith("f")) p = p.substring(0, p.length() - 1);
+                            try {
+                                m[i] = Float.parseFloat(p);
+                            } catch (NumberFormatException ignored) {}
+                        }
+                    }
+                }
+            } else {
+                m[0] = 1f; m[5] = 1f; m[10] = 1f; m[15] = 1f;
+            }
+            Matrix4f matrix = new Matrix4f();
+            matrix.setTransposed(m);
+            Vector3f translation = new Vector3f();
+            matrix.getTranslation(translation);
+            translations.add(translation);
+        }
+
+        List<List<Vector3f>> clusters = new ArrayList<>();
+        float threshold = 1.5f;
+        for (Vector3f t : translations) {
+            List<List<Vector3f>> matchingClusters = new ArrayList<>();
+            for (List<Vector3f> cluster : clusters) {
+                for (Vector3f member : cluster) {
+                    if (member.distance(t) < threshold) {
+                        matchingClusters.add(cluster);
+                        break;
+                    }
+                }
+            }
+            if (matchingClusters.isEmpty()) {
+                List<Vector3f> newCluster = new ArrayList<>();
+                newCluster.add(t);
+                clusters.add(newCluster);
+            } else {
+                List<Vector3f> main = matchingClusters.get(0);
+                main.add(t);
+                for (int i = 1; i < matchingClusters.size(); i++) {
+                    main.addAll(matchingClusters.get(i));
+                    clusters.remove(matchingClusters.get(i));
+                }
+            }
+        }
+
+        for (int i = 0; i < clusters.size(); i++) {
+            List<Vector3f> cluster = clusters.get(i);
+            float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
+            float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+            float minZ = Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
+            for (Vector3f v : cluster) {
+                minX = Math.min(minX, v.x);
+                maxX = Math.max(maxX, v.x);
+                minY = Math.min(minY, v.y);
+                maxY = Math.max(maxY, v.y);
+                minZ = Math.min(minZ, v.z);
+                maxZ = Math.max(maxZ, v.z);
+            }
+
+            double widthX = (maxX - minX) + 1.0;
+            double widthZ = (maxZ - minZ) + 1.0;
+            double heightY = (maxY - minY) + 1.0;
+
+            double centerX = (minX + maxX) / 2.0;
+            double centerY = minY;
+            double centerZ = (minZ + maxZ) / 2.0;
+
+            BdeModel.HitboxConfig hc = new BdeModel.HitboxConfig();
+            hc.setOffset(Arrays.asList(centerX, centerY, centerZ));
+            hc.setWidth(Math.max(0.5, Math.max(widthX, widthZ)));
+            hc.setHeight(Math.max(0.5, heightY));
+            hc.setName("auto_" + i);
+            hitboxes.add(hc);
+        }
+        return hitboxes;
+    }
+
+    public void updateHitboxLocations(ModelInstance instance, Location targetLoc) {
+        BdeModel model = instance.getModel();
+        List<BdeModel.HitboxConfig> hbConfigs = model.getVehicle() != null ? model.getVehicle().getHitboxes() : null;
+        if (hbConfigs == null || hbConfigs.isEmpty()) {
+            hbConfigs = generateDynamicHitboxes(model);
+        }
+        if (hbConfigs.isEmpty()) {
+            BdeModel.HitboxConfig fallback = new BdeModel.HitboxConfig();
+            fallback.setOffset(model.getSeatOffset() != null ? model.getSeatOffset() : Arrays.asList(0.0, 0.0, 0.0));
+            BoundingBox bounds = calculateModelBounds(model, instance.getScale());
+            fallback.setWidth(bounds.getWidth());
+            fallback.setHeight(bounds.getHeight());
+            hbConfigs.add(fallback);
+        }
+
+        List<Interaction> activeHitboxes = instance.getHitboxes();
+        for (int i = 0; i < activeHitboxes.size(); i++) {
+            if (i >= hbConfigs.size()) break;
+            Interaction hb = activeHitboxes.get(i);
+            if (hb != null && hb.isValid()) {
+                Location hbLoc = ModelTransformEngine.getSeatPosition(targetLoc, hbConfigs.get(i).getOffset(), model.getSeatOffset(), instance.getScale(), model.getFrontYawOffset());
+                hbLoc.setYaw(targetLoc.getYaw());
+                hb.teleport(hbLoc);
+            }
+        }
+    }
+
+    public void updateHitboxLocation(ModelInstance instance) {
+        if (instance.getVehicleRoot() != null && instance.getVehicleRoot().isValid()) {
+            updateHitboxLocations(instance, instance.getVehicleRoot().getLocation());
+        }
+    }
+
+    public List<Double> getSubsystemOffset(BdeModel model, String tag) {
+        if (model.getPassengers() == null) return Arrays.asList(0.0, 0.0, 0.0);
+        List<String> flatPassengers = new ArrayList<>();
+        for (String s : model.getPassengers()) {
+            List<String> split = splitObjects(s);
+            for (String p : split) {
+                collectAllPassengers(p, flatPassengers);
+            }
+        }
+        for (String snbt : flatPassengers) {
+            if (snbt.contains("Tags:[") && snbt.contains(tag)) {
+                int transIdx = snbt.indexOf("transformation:[");
+                if (transIdx != -1) {
+                    int endTrans = snbt.indexOf("]", transIdx);
+                    if (endTrans != -1) {
+                        String matrixStr = snbt.substring(transIdx + 16, endTrans);
+                        String[] parts = matrixStr.split(",");
+                        if (parts.length == 16) {
+                            float[] m = new float[16];
+                            for (int i = 0; i < 16; i++) {
+                                String p = parts[i].trim().toLowerCase();
+                                if (p.endsWith("f")) p = p.substring(0, p.length() - 1);
+                                m[i] = Float.parseFloat(p);
+                            }
+                            Matrix4f matrix = new Matrix4f();
+                            matrix.setTransposed(m);
+                            Vector3f translation = new Vector3f();
+                            matrix.getTranslation(translation);
+                            return Arrays.asList((double) translation.x, (double) translation.y, (double) translation.z);
+                        }
+                    }
+                }
+            }
+        }
+        return Arrays.asList(0.0, 0.0, 0.0);
     }
 
     public void updateSeatLocations(ModelInstance instance) {
@@ -982,25 +1318,148 @@ public class ModelManager {
             for (org.bukkit.entity.ArmorStand seat : activeSeats) {
                 for (int i = 0; i < pOffsets.size(); i++) {
                     if (seat.getScoreboardTags().contains("bde_seat_" + i)) {
-                        Location seatLoc = ModelTransformEngine.getSeatPosition(vehicleRoot.getLocation(), pOffsets.get(i), instance.getModel().getSeatOffset(), scale, instance.getModel().getFrontYawOffset());
+                        Location seatLoc = null;
                         double psYaw = 0.0;
-                        if (instance.getModel().getVehicle() != null && i < instance.getModel().getVehicle().getPassengerSeats().size()) {
-                            psYaw = instance.getModel().getVehicle().getPassengerSeats().get(i).getYaw();
+                        
+                        Player rider = null;
+                        for (Entity passenger : seat.getPassengers()) {
+                            if (passenger instanceof Player) {
+                                rider = (Player) passenger;
+                                break;
+                            }
                         }
+
+                        boolean camActive = false;
+                        if (rider != null && instance.isWeaponCamActive(rider.getUniqueId()) && instance.getModel().getVehicle() != null) {
+                            for (BdeModel.SubsystemConfig sub : instance.getModel().getVehicle().getSubsystems()) {
+                                if (sub.getControllerSeatIndex() == i) {
+                                    double subYaw;
+                                    double subPitch;
+                                    if (instance.isSubsystemWasdAiming(sub.getName())) {
+                                        subYaw = instance.getSubsystemAimYaw(sub.getName(), vehicleRoot.getLocation().getYaw());
+                                        subPitch = instance.getSubsystemAimPitch(sub.getName(), 0.0);
+                                    } else {
+                                        subYaw = rider.getLocation().getYaw();
+                                        subPitch = rider.getLocation().getPitch();
+                                    }
+                                    double relativeYaw = ((subYaw - vehicleRoot.getLocation().getYaw()) % 360.0 + 540.0) % 360.0 - 180.0;
+                                    if (sub.getFovMinYaw() != null) relativeYaw = Math.max(sub.getFovMinYaw(), relativeYaw);
+                                    if (sub.getFovMaxYaw() != null) relativeYaw = Math.min(sub.getFovMaxYaw(), relativeYaw);
+                                    double relativePitch = subPitch;
+                                    if (sub.getFovMinPitch() != null) relativePitch = Math.max(sub.getFovMinPitch(), relativePitch);
+                                    if (sub.getFovMaxPitch() != null) relativePitch = Math.min(sub.getFovMaxPitch(), relativePitch);
+
+                                    List<Double> mountOffset = sub.getMountOffset();
+                                    if (mountOffset == null || mountOffset.isEmpty()) {
+                                        mountOffset = getSubsystemOffset(instance.getModel(), sub.getDisplayTag());
+                                    }
+                                    List<Double> cameraOffset = sub.getCameraOffset();
+                                    if (cameraOffset == null || cameraOffset.isEmpty()) {
+                                        cameraOffset = Arrays.asList(0.0, 0.0, 0.0);
+                                    }
+
+                                    seatLoc = ModelTransformEngine.getSubsystemComponentPosition(
+                                        vehicleRoot.getLocation(),
+                                        mountOffset,
+                                        cameraOffset,
+                                        instance.getModel().getSeatOffset(),
+                                        scale,
+                                        instance.getModel().getFrontYawOffset(),
+                                        vehicleRoot.getLocation().getYaw(),
+                                        vehicleRoot.getLocation().getPitch(),
+                                        relativeYaw,
+                                        relativePitch,
+                                        sub.getPivotOffset()
+                                    );
+                                    psYaw = relativeYaw;
+                                    camActive = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!camActive) {
+                            seatLoc = ModelTransformEngine.getSeatPosition(vehicleRoot.getLocation(), pOffsets.get(i), instance.getModel().getSeatOffset(), scale, instance.getModel().getFrontYawOffset());
+                            if (instance.getModel().getVehicle() != null && i < instance.getModel().getVehicle().getPassengerSeats().size()) {
+                                psYaw = instance.getModel().getVehicle().getPassengerSeats().get(i).getYaw();
+                            }
+                        }
+
                         seatLoc.setYaw((float) ((vehicleRoot.getLocation().getYaw() + psYaw) % 360.0));
                         teleportKeepPassengers(seat, seatLoc);
                         break;
                     }
                 }
             }
+
             Entity driverSeat = instance.getDriverSeat();
             if (driverSeat != null && driverSeat.isValid()) {
-                double dsYaw = 0.0;
-                if (instance.getModel().getVehicle() != null) {
-                    dsYaw = instance.getModel().getVehicle().getDriverSeatYaw();
+                Player driverRider = null;
+                for (Entity passenger : driverSeat.getPassengers()) {
+                    if (passenger instanceof Player) {
+                        driverRider = (Player) passenger;
+                        break;
+                    }
                 }
-                float finalDsYaw = (float) ((vehicleRoot.getLocation().getYaw() + dsYaw) % 360.0);
-                driverSeat.setRotation(finalDsYaw, driverSeat.getLocation().getPitch());
+
+                boolean driverCamActive = false;
+                if (driverRider != null && instance.isWeaponCamActive(driverRider.getUniqueId()) && instance.getModel().getVehicle() != null) {
+                    for (BdeModel.SubsystemConfig sub : instance.getModel().getVehicle().getSubsystems()) {
+                        if (sub.getControllerSeatIndex() == -1) {
+                            double relativeYaw = ((driverRider.getLocation().getYaw() - vehicleRoot.getLocation().getYaw()) % 360.0 + 540.0) % 360.0 - 180.0;
+                            if (sub.getFovMinYaw() != null) relativeYaw = Math.max(sub.getFovMinYaw(), relativeYaw);
+                            if (sub.getFovMaxYaw() != null) relativeYaw = Math.min(sub.getFovMaxYaw(), relativeYaw);
+                            double relativePitch = driverRider.getLocation().getPitch();
+                            if (sub.getFovMinPitch() != null) relativePitch = Math.max(sub.getFovMinPitch(), relativePitch);
+                            if (sub.getFovMaxPitch() != null) relativePitch = Math.min(sub.getFovMaxPitch(), relativePitch);
+
+                            List<Double> mountOffset = sub.getMountOffset();
+                            if (mountOffset == null || mountOffset.isEmpty()) {
+                                mountOffset = getSubsystemOffset(instance.getModel(), sub.getDisplayTag());
+                            }
+                            List<Double> cameraOffset = sub.getCameraOffset();
+                            if (cameraOffset == null || cameraOffset.isEmpty()) {
+                                cameraOffset = Arrays.asList(0.0, 0.0, 0.0);
+                            }
+
+                            Location dsLoc = ModelTransformEngine.getSubsystemComponentPosition(
+                                vehicleRoot.getLocation(),
+                                mountOffset,
+                                cameraOffset,
+                                instance.getModel().getSeatOffset(),
+                                scale,
+                                instance.getModel().getFrontYawOffset(),
+                                vehicleRoot.getLocation().getYaw(),
+                                vehicleRoot.getLocation().getPitch(),
+                                relativeYaw,
+                                relativePitch,
+                                sub.getPivotOffset()
+                            );
+                            
+                            if (vehicleRoot.getPassengers().contains(driverSeat)) {
+                                vehicleRoot.removePassenger(driverSeat);
+                            }
+                            
+                            dsLoc.setYaw((float) ((vehicleRoot.getLocation().getYaw() + relativeYaw) % 360.0));
+                            teleportKeepPassengers(driverSeat, dsLoc);
+                            driverCamActive = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!driverCamActive) {
+                    if (!vehicleRoot.getPassengers().contains(driverSeat)) {
+                        driverSeat.teleport(vehicleRoot.getLocation());
+                        vehicleRoot.addPassenger(driverSeat);
+                    }
+                    double dsYaw = 0.0;
+                    if (instance.getModel().getVehicle() != null) {
+                        dsYaw = instance.getModel().getVehicle().getDriverSeatYaw();
+                    }
+                    float finalDsYaw = (float) ((vehicleRoot.getLocation().getYaw() + dsYaw) % 360.0);
+                    driverSeat.setRotation(finalDsYaw, driverSeat.getLocation().getPitch());
+                }
             }
         }
     }
@@ -1221,8 +1680,13 @@ public class ModelManager {
 
     public void teleportModel(ModelInstance instance, Location newLoc) {
         instance.setCurrentLocation(newLoc.clone());
+        instance.setCurrentYaw((float) newLoc.getYaw());
+        instance.setVelocityX(0.0);
+        instance.setVelocityZ(0.0);
+        instance.setCurrentSpeed(0.0);
         if (instance.getVehicleRoot() != null) {
             teleportKeepPassengers(instance.getVehicleRoot(), newLoc);
+            updateHitboxLocations(instance, newLoc);
         } else {
             for (Display display : instance.getPassengers()) {
                 display.teleport(newLoc);
@@ -1408,6 +1872,38 @@ public class ModelManager {
         }
     }
 
+    private double getBlockTraction(Location loc, BdeModel.VehicleStats stats) {
+        org.bukkit.Material blockType = loc.clone().subtract(0, 0.1, 0).getBlock().getType();
+        String matName = blockType.name();
+
+        // 1. Check vehicle overrides
+        if (stats.getBlockOverrides() != null && stats.getBlockOverrides().containsKey(matName)) {
+            return stats.getBlockOverrides().get(matName);
+        }
+
+        // 2. Check config
+        String configPath = "block-traction." + matName;
+        if (plugin.getConfig().contains(configPath)) {
+            return plugin.getConfig().getDouble(configPath);
+        }
+
+        // 3. Fallback to hardcoded defaults
+        switch (blockType) {
+            case BLUE_ICE:
+                return 0.02;
+            case PACKED_ICE:
+                return 0.05;
+            case ICE:
+                return 0.1;
+            case SLIME_BLOCK:
+                return 0.2;
+            case SOUL_SAND:
+                return 0.4;
+            default:
+                return 1.0;
+        }
+    }
+
     private void startVehicleTick() {
         new org.bukkit.scheduler.BukkitRunnable() {
             @Override
@@ -1446,20 +1942,23 @@ public class ModelManager {
                             (instance.getDriverSeat() != null ? instance.getDriverSeat().getPassengers().size() : 0)
                         ));
                     }
-                    
+                    BdeModel.VehicleStats stats = instance.getModel().getVehicleStats();
+                    if (stats == null) continue;
+
+                    Location rootLoc = vehicleRoot.getLocation();
+                    double vehicleTraction = stats.getTraction();
+                    double blockTraction = getBlockTraction(rootLoc, stats);
+                    double effectiveTraction = Math.max(0.0, Math.min(1.0, vehicleTraction * blockTraction));
+
                     if (driver != null) {
                         PlayerInputTracker.PlayerInputData input = inputTracker.getInput(driver.getUniqueId());
-                        BdeModel.VehicleStats stats = instance.getModel().getVehicleStats();
-                        if (stats == null) continue;
                         
                         double topSpeed = stats.getTopSpeed();
                         double accel = stats.getAcceleration();
                         double decel = stats.getDeceleration();
-                        double revSpeed = stats.getReverseSpeed();
                         double turnSpeed = stats.getTurnSpeed();
                         
-                        Location rootLoc = vehicleRoot.getLocation();
-                        float yaw = rootLoc.getYaw();
+                        float yaw = instance.getCurrentYaw();
                         
                         if (input.left) {
                             yaw = (yaw - (float) turnSpeed) % 360;
@@ -1467,12 +1966,13 @@ public class ModelManager {
                         if (input.right) {
                             yaw = (yaw + (float) turnSpeed) % 360;
                         }
+                        instance.setCurrentYaw(yaw);
                         
                         double speed = instance.getCurrentSpeed();
                         if (input.forward) {
                             speed = Math.min(topSpeed, speed + accel);
                         } else if (input.backward) {
-                            speed = Math.max(-revSpeed, speed - accel);
+                            speed = Math.max(-stats.getReverseSpeed(), speed - accel);
                         } else {
                             if (speed > 0) {
                                 speed = Math.max(0.0, speed - decel);
@@ -1482,11 +1982,18 @@ public class ModelManager {
                         }
                         instance.setCurrentSpeed(speed);
                         
+                        // Compute target horizontal velocities
                         double yawRad = Math.toRadians(yaw);
-                        double dx = -Math.sin(yawRad) * speed;
-                        double dz = Math.cos(yawRad) * speed;
+                        double tx = -Math.sin(yawRad) * speed;
+                        double tz = Math.cos(yawRad) * speed;
                         
-                        Location targetLoc = rootLoc.clone().add(dx, 0, dz);
+                        // Linearly interpolate actual velocities
+                        double vx = instance.getVelocityX() + (tx - instance.getVelocityX()) * effectiveTraction;
+                        double vz = instance.getVelocityZ() + (tz - instance.getVelocityZ()) * effectiveTraction;
+                        instance.setVelocityX(vx);
+                        instance.setVelocityZ(vz);
+                        
+                        Location targetLoc = rootLoc.clone().add(vx, 0, vz);
                         targetLoc.setYaw(yaw);
                         
                         double newY = targetLoc.getY();
@@ -1509,6 +2016,8 @@ public class ModelManager {
                                 targetLoc.setX(rootLoc.getX());
                                 targetLoc.setZ(rootLoc.getZ());
                                 instance.setCurrentSpeed(0.0);
+                                instance.setVelocityX(0.0);
+                                instance.setVelocityZ(0.0);
                             }
                         } else {
                             targetLoc.setY(rootLoc.getY() - 0.2);
@@ -1523,53 +2032,16 @@ public class ModelManager {
                         }
 
                         // Apply physical velocity for smooth client interpolation
-                        org.bukkit.util.Vector vel = new org.bukkit.util.Vector(dx, targetLoc.getY() - rootLoc.getY(), dz);
+                        org.bukkit.util.Vector vel = new org.bukkit.util.Vector(vx, targetLoc.getY() - rootLoc.getY(), vz);
                         vehicleRoot.setVelocity(vel);
                         teleportKeepPassengers(vehicleRoot, targetLoc);
                         
-                        // Sync hitbox position
-                        if (hitbox != null && hitbox.isValid()) {
-                            Location hitboxLoc = ModelTransformEngine.getHitboxPosition(targetLoc, instance.getModel(), instance.getScale());
-                            hitboxLoc.setYaw(targetLoc.getYaw());
-                            hitbox.teleport(hitboxLoc);
-                        }
-
-                        // Update display entity visual transformations (applies yaw rotation)
-                        updateModelTransforms(instance);
-                        
-                        // Sync seats
-                        List<List<Double>> pOffsets = instance.getModel().getPassengerOffsets();
-                        List<org.bukkit.entity.ArmorStand> activeSeats = instance.getPassengerSeats();
-                        double scale = instance.getScale();
-                        
-                        for (org.bukkit.entity.ArmorStand seat : activeSeats) {
-                            for (int i = 0; i < pOffsets.size(); i++) {
-                                if (seat.getScoreboardTags().contains("bde_seat_" + i)) {
-                                    Location seatLoc = ModelTransformEngine.getSeatPosition(targetLoc, pOffsets.get(i), instance.getModel().getSeatOffset(), scale, instance.getModel().getFrontYawOffset());
-                                    double psYaw = 0.0;
-                                    if (instance.getModel().getVehicle() != null && i < instance.getModel().getVehicle().getPassengerSeats().size()) {
-                                        psYaw = instance.getModel().getVehicle().getPassengerSeats().get(i).getYaw();
-                                    }
-                                    seatLoc.setYaw((float) ((targetLoc.getYaw() + psYaw) % 360.0));
-                                    teleportKeepPassengers(seat, seatLoc);
-                                    break;
-                                }
-                            }
-                        }
-                        Entity driverSeat = instance.getDriverSeat();
-                        if (driverSeat != null && driverSeat.isValid()) {
-                            double dsYaw = 0.0;
-                            if (instance.getModel().getVehicle() != null) {
-                                dsYaw = instance.getModel().getVehicle().getDriverSeatYaw();
-                            }
-                            float finalDsYaw = (float) ((targetLoc.getYaw() + dsYaw) % 360.0);
-                            driverSeat.setRotation(finalDsYaw, driverSeat.getLocation().getPitch());
-                        }
+                        // Sync hitbox positions
+                        updateHitboxLocations(instance, targetLoc);
                     } else {
                         double speed = instance.getCurrentSpeed();
-                        if (speed != 0.0) {
-                            BdeModel.VehicleStats stats = instance.getModel().getVehicleStats();
-                            double decel = stats != null ? stats.getDeceleration() : 0.03;
+                        if (speed != 0.0 || Math.abs(instance.getVelocityX()) > 0.001 || Math.abs(instance.getVelocityZ()) > 0.001) {
+                            double decel = stats.getDeceleration();
                             if (speed > 0) {
                                 speed = Math.max(0.0, speed - decel);
                             } else if (speed < 0) {
@@ -1577,12 +2049,18 @@ public class ModelManager {
                             }
                             instance.setCurrentSpeed(speed);
                             
-                            Location rootLoc = vehicleRoot.getLocation();
-                            double yawRad = Math.toRadians(rootLoc.getYaw());
-                            double dx = -Math.sin(yawRad) * speed;
-                            double dz = Math.cos(yawRad) * speed;
+                            float yaw = instance.getCurrentYaw();
+                            double yawRad = Math.toRadians(yaw);
+                            double tx = -Math.sin(yawRad) * speed;
+                            double tz = Math.cos(yawRad) * speed;
                             
-                            Location targetLoc = rootLoc.clone().add(dx, 0, dz);
+                            double vx = instance.getVelocityX() + (tx - instance.getVelocityX()) * effectiveTraction;
+                            double vz = instance.getVelocityZ() + (tz - instance.getVelocityZ()) * effectiveTraction;
+                            instance.setVelocityX(vx);
+                            instance.setVelocityZ(vz);
+                            
+                            Location targetLoc = rootLoc.clone().add(vx, 0, vz);
+                            targetLoc.setYaw(yaw);
                             
                             double newY = targetLoc.getY();
                             boolean hasGround = false;
@@ -1602,49 +2080,25 @@ public class ModelManager {
                                     targetLoc.setX(rootLoc.getX());
                                     targetLoc.setZ(rootLoc.getZ());
                                     instance.setCurrentSpeed(0.0);
+                                    instance.setVelocityX(0.0);
+                                    instance.setVelocityZ(0.0);
                                 }
                             } else {
                                 targetLoc.setY(rootLoc.getY() - 0.2);
                             }
                             
-                            org.bukkit.util.Vector vel = new org.bukkit.util.Vector(dx, targetLoc.getY() - rootLoc.getY(), dz);
+                            org.bukkit.util.Vector vel = new org.bukkit.util.Vector(vx, targetLoc.getY() - rootLoc.getY(), vz);
                             vehicleRoot.setVelocity(vel);
                             teleportKeepPassengers(vehicleRoot, targetLoc);
                             
-                            if (hitbox != null && hitbox.isValid()) {
-                                Location hitboxLoc = ModelTransformEngine.getHitboxPosition(targetLoc, instance.getModel(), instance.getScale());
-                                hitboxLoc.setYaw(targetLoc.getYaw());
-                                hitbox.teleport(hitboxLoc);
-                            }
-
-                            List<List<Double>> pOffsets = instance.getModel().getPassengerOffsets();
-                            List<org.bukkit.entity.ArmorStand> activeSeats = instance.getPassengerSeats();
-                            double scale = instance.getScale();
-                            for (org.bukkit.entity.ArmorStand seat : activeSeats) {
-                                for (int i = 0; i < pOffsets.size(); i++) {
-                                    if (seat.getScoreboardTags().contains("bde_seat_" + i)) {
-                                        Location seatLoc = ModelTransformEngine.getSeatPosition(targetLoc, pOffsets.get(i), instance.getModel().getSeatOffset(), scale, instance.getModel().getFrontYawOffset());
-                                        double psYaw = 0.0;
-                                        if (instance.getModel().getVehicle() != null && i < instance.getModel().getVehicle().getPassengerSeats().size()) {
-                                            psYaw = instance.getModel().getVehicle().getPassengerSeats().get(i).getYaw();
-                                        }
-                                        seatLoc.setYaw((float) ((targetLoc.getYaw() + psYaw) % 360.0));
-                                        teleportKeepPassengers(seat, seatLoc);
-                                        break;
-                                    }
-                                }
-                            }
-                            Entity driverSeat = instance.getDriverSeat();
-                            if (driverSeat != null && driverSeat.isValid()) {
-                                double dsYaw = 0.0;
-                                if (instance.getModel().getVehicle() != null) {
-                                    dsYaw = instance.getModel().getVehicle().getDriverSeatYaw();
-                                }
-                                float finalDsYaw = (float) ((targetLoc.getYaw() + dsYaw) % 360.0);
-                                driverSeat.setRotation(finalDsYaw, driverSeat.getLocation().getPitch());
-                            }
+                            // Sync hitbox positions
+                            updateHitboxLocations(instance, targetLoc);
                         }
                     }
+
+                    // Always update subsystems and seats every tick!
+                    updateSubsystems(instance);
+                    updateSeatLocations(instance);
                 }
             }
         }.runTaskTimer(plugin, 0L, 1L);
@@ -1832,5 +2286,1403 @@ public class ModelManager {
         if (endQuoteIdx == -1) return null;
 
         return snbt.substring(startQuoteIdx + 1, endQuoteIdx);
+    }
+
+    public static class LockSession {
+        public Entity target;
+        public long startTime;
+        public String lastStatus = ""; // "none", "soft", "full"
+    }
+
+    public static class CustomProjectile {
+        private final Entity baseEntity;
+        private final Display displayEntity;
+        private final Player shooter;
+        private final BdeModel.ProjectileConfig config;
+        private final Entity target;
+        private final boolean fullLock;
+        private final Location targetCoord;
+        private org.bukkit.util.Vector velocity;
+        private int ticksLived = 0;
+
+        public CustomProjectile(Entity baseEntity, Display displayEntity, Player shooter, BdeModel.ProjectileConfig config, org.bukkit.util.Vector velocity, Entity target, boolean fullLock, Location targetCoord) {
+            this.baseEntity = baseEntity;
+            this.displayEntity = displayEntity;
+            this.shooter = shooter;
+            this.config = config;
+            this.velocity = velocity;
+            this.target = target;
+            this.fullLock = fullLock;
+            this.targetCoord = targetCoord;
+        }
+
+        public Entity getBaseEntity() { return baseEntity; }
+        public Display getDisplayEntity() { return displayEntity; }
+        public Player getShooter() { return shooter; }
+        public BdeModel.ProjectileConfig getConfig() { return config; }
+        public org.bukkit.util.Vector getVelocity() { return velocity; }
+        public void setVelocity(org.bukkit.util.Vector velocity) { this.velocity = velocity; }
+        public int getTicksLived() { return ticksLived; }
+        public void incrementTicks() { this.ticksLived++; }
+        public Entity getTarget() { return target; }
+        public boolean isFullLock() { return fullLock; }
+        public Location getTargetCoord() { return targetCoord; }
+    }
+
+    private void startProjectileTick() {
+        new org.bukkit.scheduler.BukkitRunnable() {
+            @Override
+            public void run() {
+                Iterator<CustomProjectile> it = activeProjectiles.iterator();
+                while (it.hasNext()) {
+                    CustomProjectile proj = it.next();
+                    Entity base = proj.getBaseEntity();
+                    if (base == null || !base.isValid()) {
+                        if (proj.getDisplayEntity() != null && proj.getDisplayEntity().isValid()) {
+                            proj.getDisplayEntity().remove();
+                        }
+                        it.remove();
+                        continue;
+                    }
+
+                    proj.incrementTicks();
+                    if (proj.getTicksLived() > 200) {
+                        base.remove();
+                        if (proj.getDisplayEntity() != null && proj.getDisplayEntity().isValid()) {
+                            proj.getDisplayEntity().remove();
+                        }
+                        it.remove();
+                        continue;
+                    }
+
+                    BdeModel.ProjectileConfig config = proj.getConfig();
+                    Location loc = base.getLocation();
+                    org.bukkit.util.Vector vel = proj.getVelocity();
+
+                    if (config.isHasGravity()) {
+                        vel.add(new org.bukkit.util.Vector(0, -0.04, 0));
+                    }
+
+                    if (config.isLockOn()) {
+                        if (proj.isFullLock() && proj.getTarget() != null && proj.getTarget().isValid()) {
+                            Location targetLoc = proj.getTarget().getLocation();
+                            targetLoc.add(0, proj.getTarget().getHeight() / 2, 0);
+                            org.bukkit.util.Vector toTarget = targetLoc.toVector().subtract(loc.toVector()).normalize();
+                            vel = vel.add(toTarget.multiply(0.2)).normalize().multiply(config.getSpeed());
+                            proj.setVelocity(vel);
+                        } else if (!proj.isFullLock() && proj.getTargetCoord() != null) {
+                            org.bukkit.util.Vector toTarget = proj.getTargetCoord().toVector().subtract(loc.toVector()).normalize();
+                            vel = vel.add(toTarget.multiply(0.15)).normalize().multiply(config.getSpeed());
+                            proj.setVelocity(vel);
+                        }
+                    }
+
+                    Location nextLoc = loc.clone().add(vel);
+                    nextLoc.setDirection(vel);
+                    base.teleport(nextLoc);
+
+                    if (proj.getDisplayEntity() != null && proj.getDisplayEntity().isValid()) {
+                        proj.getDisplayEntity().teleport(nextLoc);
+                    }
+
+                    if (config.getFlyParticle() != null && !config.getFlyParticle().isEmpty()) {
+                        try {
+                            org.bukkit.Particle p = org.bukkit.Particle.valueOf(config.getFlyParticle().toUpperCase());
+                            loc.getWorld().spawnParticle(p, loc, config.getFlyParticleCount(), 0.05, 0.05, 0.05, 0.01);
+                        } catch (IllegalArgumentException ignored) {}
+                    }
+
+                    org.bukkit.block.Block block = nextLoc.getBlock();
+                    boolean collided = block.getType().isSolid();
+                    org.bukkit.entity.Entity hitEntity = null;
+
+                    if (!collided) {
+                        java.util.Collection<Entity> nearby = loc.getWorld().getNearbyEntities(nextLoc, 0.6, 0.6, 0.6);
+                        for (Entity e : nearby) {
+                            if (e.equals(base) || e.equals(proj.getShooter()) || (proj.getDisplayEntity() != null && e.equals(proj.getDisplayEntity()))) {
+                                continue;
+                            }
+                            ModelInstance shooterInst = null;
+                            for (ModelInstance inst : activeInstances.values()) {
+                                if (inst.getVehicleRoot() != null && inst.getVehicleRoot().getPassengers().contains(proj.getShooter())) {
+                                    shooterInst = inst;
+                                    break;
+                                }
+                                if (inst.getDriverSeat() != null && inst.getDriverSeat().getPassengers().contains(proj.getShooter())) {
+                                    shooterInst = inst;
+                                    break;
+                                }
+                            }
+                            if (shooterInst != null) {
+                                if (e.equals(shooterInst.getVehicleRoot()) || shooterInst.getHitboxes().contains(e) || shooterInst.getPassengerSeats().contains(e) || e.equals(shooterInst.getDriverSeat())) {
+                                    continue;
+                                }
+                            }
+
+                            if (e instanceof org.bukkit.entity.LivingEntity || (e instanceof Interaction && e.getScoreboardTags().contains("bde_root"))) {
+                                hitEntity = e;
+                                collided = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (collided) {
+                        Location impactLoc = hitEntity != null ? hitEntity.getLocation() : nextLoc;
+                        
+                        if (config.getImpactParticle() != null && !config.getImpactParticle().isEmpty()) {
+                            try {
+                                org.bukkit.Particle p = org.bukkit.Particle.valueOf(config.getImpactParticle().toUpperCase());
+                                impactLoc.getWorld().spawnParticle(p, impactLoc, config.getImpactParticleCount(), 0.2, 0.2, 0.2, 0.1);
+                            } catch (IllegalArgumentException ignored) {}
+                        }
+
+                        if (hitEntity != null) {
+                            if (hitEntity instanceof org.bukkit.entity.LivingEntity) {
+                                ((org.bukkit.entity.LivingEntity) hitEntity).damage(config.getDamage(), proj.getShooter());
+                            } else if (hitEntity instanceof Interaction) {
+                                ModelInstance hitInstance = getInstanceByRoot(hitEntity);
+                                if (hitInstance != null) {
+                                    double hp = hitInstance.getCurrentHp();
+                                    hp = Math.max(0.0, hp - config.getDamage());
+                                    hitInstance.setCurrentHp(hp);
+                                    
+                                    Location hitLoc = hitEntity.getLocation();
+                                    hitLoc.getWorld().playSound(hitLoc, org.bukkit.Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+                                    try {
+                                        hitLoc.getWorld().spawnParticle(org.bukkit.Particle.valueOf("DAMAGE_INDICATOR"), hitLoc, 5, 0.2, 0.2, 0.2, 0.1);
+                                    } catch (Exception ignored) {}
+                                    
+                                    proj.getShooter().sendMessage("§cVehicle HP: §l" + String.format("%.1f", hp) + "§7/§f" + String.format("%.1f", hitInstance.getModel().getVehicleStats().getMaxHp()));
+
+                                    if (hp <= 0.0) {
+                                        hitLoc.getWorld().createExplosion(hitLoc, 2.0f, false, false);
+                                        removeInstance(hitInstance.getId());
+                                        proj.getShooter().sendMessage("§cVehicle destroyed!");
+                                    }
+                                }
+                            }
+                        }
+
+                        if ("explode".equalsIgnoreCase(config.getOnHit())) {
+                            Location explLoc = nextLoc;
+                            if (config.isVanillaExplosionDamage()) {
+                                explLoc.getWorld().createExplosion(explLoc, (float) config.getExplosionPower(), config.isDestroyBlocks(), config.isDestroyBlocks());
+                            } else {
+                                explLoc.getWorld().createExplosion(explLoc, (float) config.getExplosionPower(), false, false);
+                                
+                                double rad = config.getExplosionPower() * 2.0;
+                                for (Entity e : explLoc.getWorld().getNearbyEntities(explLoc, rad, rad, rad)) {
+                                    if (e.equals(proj.getShooter())) continue;
+                                    
+                                    if (e instanceof org.bukkit.entity.LivingEntity) {
+                                        double dist = e.getLocation().distance(explLoc);
+                                        if (dist <= rad) {
+                                            double factor = 1.0 - (dist / rad);
+                                            double finalDmg = config.getDamage() * factor;
+                                            ((org.bukkit.entity.LivingEntity) e).damage(finalDmg, proj.getShooter());
+                                        }
+                                    } else if (e instanceof Interaction && e.getScoreboardTags().contains("bde_root")) {
+                                        ModelInstance hitInstance = getInstanceByRoot(e);
+                                        if (hitInstance != null) {
+                                            double dist = e.getLocation().distance(explLoc);
+                                            if (dist <= rad) {
+                                                double factor = 1.0 - (dist / rad);
+                                                double finalDmg = config.getDamage() * factor;
+                                                
+                                                double hp = hitInstance.getCurrentHp();
+                                                hp = Math.max(0.0, hp - finalDmg);
+                                                hitInstance.setCurrentHp(hp);
+                                                
+                                                Location hitLoc = e.getLocation();
+                                                hitLoc.getWorld().playSound(hitLoc, org.bukkit.Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+                                                
+                                                proj.getShooter().sendMessage("§cVehicle HP: §l" + String.format("%.1f", hp) + "§7/§f" + String.format("%.1f", hitInstance.getModel().getVehicleStats().getMaxHp()));
+
+                                                if (hp <= 0.0) {
+                                                    hitLoc.getWorld().createExplosion(hitLoc, 2.0f, false, false);
+                                                    removeInstance(hitInstance.getId());
+                                                    proj.getShooter().sendMessage("§cVehicle destroyed!");
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        base.remove();
+                        if (proj.getDisplayEntity() != null && proj.getDisplayEntity().isValid()) {
+                            proj.getDisplayEntity().remove();
+                        }
+                        it.remove();
+                    }
+                }
+            }
+        }.runTaskTimer(plugin, 0L, 1L);
+    }
+
+    public void updateSubsystems(ModelInstance instance) {
+        BdeModel model = instance.getModel();
+        if (model.getVehicle() == null || model.getVehicle().getSubsystems() == null || model.getVehicle().getSubsystems().isEmpty()) {
+            return;
+        }
+
+        Entity vehicleRoot = instance.getVehicleRoot();
+        if (vehicleRoot == null || !vehicleRoot.isValid()) return;
+
+        Location rootLoc = vehicleRoot.getLocation();
+        double scale = instance.getScale();
+        BoundingBox box = calculateModelBounds(model, scale);
+        float interactionHeight = Math.max(0.1f, box.maxY);
+        float mountHeight = getMountHeight(vehicleRoot, interactionHeight);
+
+        for (BdeModel.SubsystemConfig sub : model.getVehicle().getSubsystems()) {
+            Player controller = null;
+            if (sub.getControllerSeatIndex() == -1) {
+                for (Entity passenger : vehicleRoot.getPassengers()) {
+                    if (passenger instanceof Player) {
+                        controller = (Player) passenger;
+                        break;
+                    }
+                }
+                if (controller == null && instance.getDriverSeat() != null) {
+                    for (Entity passenger : instance.getDriverSeat().getPassengers()) {
+                        if (passenger instanceof Player) {
+                            controller = (Player) passenger;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                int seatIdx = sub.getControllerSeatIndex();
+                List<org.bukkit.entity.ArmorStand> seats = instance.getPassengerSeats();
+                if (seatIdx >= 0 && seatIdx < seats.size()) {
+                    org.bukkit.entity.ArmorStand seat = seats.get(seatIdx);
+                    if (seat != null && seat.isValid()) {
+                        for (Entity passenger : seat.getPassengers()) {
+                            if (passenger instanceof Player) {
+                                controller = (Player) passenger;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            List<Display> subDisplays = new ArrayList<>();
+            int subIdx = model.getVehicle().getSubsystems().indexOf(sub);
+            for (Display display : instance.getPassengers()) {
+                if (sub.getDisplayTag() != null && !sub.getDisplayTag().isEmpty() && display.getScoreboardTags().contains(sub.getDisplayTag())) {
+                    subDisplays.add(display);
+                } else if (display.hasMetadata("bde_subsystem_parent_index") &&
+                           display.getMetadata("bde_subsystem_parent_index").get(0).asInt() == subIdx) {
+                    subDisplays.add(display);
+                }
+            }
+
+            if (subDisplays.isEmpty()) continue;
+
+            if (controller != null && controller.isOnline()) {
+                double subYaw;
+                double subPitch;
+
+                if (instance.isSubsystemWasdAiming(sub.getName())) {
+                    PlayerInputTracker.PlayerInputData input = inputTracker.getInput(controller.getUniqueId());
+                    
+                    double yawVal = instance.getSubsystemAimYaw(sub.getName(), rootLoc.getYaw());
+                    double pitchVal = instance.getSubsystemAimPitch(sub.getName(), 0.0);
+
+                    double rateYaw = 2.5;
+                    if (input.left) {
+                        yawVal -= rateYaw;
+                    }
+                    if (input.right) {
+                        yawVal += rateYaw;
+                    }
+                    
+                    double ratePitch = 1.5;
+                    if (input.forward) {
+                        pitchVal -= ratePitch;
+                    }
+                    if (input.backward) {
+                        pitchVal += ratePitch;
+                    }
+                    pitchVal = Math.max(-90.0, Math.min(90.0, pitchVal));
+
+                    instance.setSubsystemAimYaw(sub.getName(), yawVal);
+                    instance.setSubsystemAimPitch(sub.getName(), pitchVal);
+
+                    subYaw = yawVal;
+                    subPitch = pitchVal;
+
+                    if (instance.isWeaponCamActive(controller.getUniqueId())) {
+                        Location current = controller.getLocation();
+                        if (Math.abs(current.getYaw() - (float)subYaw) > 0.1 || Math.abs(current.getPitch() - (float)subPitch) > 0.1) {
+                            Location newLook = current.clone();
+                            newLook.setYaw((float) subYaw);
+                            newLook.setPitch((float) subPitch);
+                            controller.teleport(newLook);
+                        }
+                    }
+                } else {
+                    subYaw = controller.getLocation().getYaw();
+                    subPitch = controller.getLocation().getPitch();
+
+                    instance.setSubsystemAimYaw(sub.getName(), subYaw);
+                    instance.setSubsystemAimPitch(sub.getName(), subPitch);
+                }
+
+                for (Display display : subDisplays) {
+                    updateSubsystemTransform(display, scale, mountHeight, model, (float) rootLoc.getYaw(), (float) rootLoc.getPitch(), subYaw, subPitch, sub);
+                }
+
+                List<BdeModel.ProjectileConfig> modes = sub.getWeaponModes();
+                if (!modes.isEmpty()) {
+                    int modeIdx = instance.getSubsystemMode(controller.getUniqueId(), sub.getName());
+                    BdeModel.ProjectileConfig mode = modes.get(modeIdx);
+                    if (mode.isLockOn()) {
+                        scanAndLockTarget(controller, instance, mode);
+                    } else {
+                        clearLockTarget(controller);
+                    }
+                }
+            } else {
+                for (Display display : subDisplays) {
+                    updateSubsystemTransform(display, scale, mountHeight, model, (float) rootLoc.getYaw(), (float) rootLoc.getPitch(), rootLoc.getYaw(), 0.0, sub);
+                }
+                if (controller != null) {
+                    clearLockTarget(controller);
+                }
+            }
+        }
+    }
+
+    private void scanAndLockTarget(Player player, ModelInstance instance, BdeModel.ProjectileConfig config) {
+        Location eye = player.getEyeLocation();
+        org.bukkit.util.Vector dir = player.getLocation().getDirection();
+        
+        Entity bestTarget = null;
+        double bestScore = -1.0;
+        
+        double range = config.getLockRange();
+        double maxAngleRad = Math.toRadians(config.getLockAngle());
+        double minDot = Math.cos(maxAngleRad);
+        
+        for (Entity entity : player.getWorld().getNearbyEntities(eye, range, range, range)) {
+            if (entity.equals(player) || entity.equals(instance.getVehicleRoot()) || instance.getHitboxes().contains(entity) || entity.equals(instance.getDriverSeat())) {
+                continue;
+            }
+            if (!(entity instanceof org.bukkit.entity.LivingEntity) && !(entity instanceof Interaction && entity.getScoreboardTags().contains("bde_root"))) {
+                continue;
+            }
+            
+            Location entityLoc = entity.getLocation().add(0, entity.getHeight() / 2, 0);
+            org.bukkit.util.Vector toEntity = entityLoc.toVector().subtract(eye.toVector());
+            double dist = toEntity.length();
+            if (dist > range) continue;
+            
+            toEntity.normalize();
+            double dot = dir.dot(toEntity);
+            if (dot >= minDot) {
+                if (player.hasLineOfSight(entity) || entity instanceof Interaction) {
+                    if (dot > bestScore) {
+                        bestScore = dot;
+                        bestTarget = entity;
+                    }
+                }
+            }
+        }
+
+        LockSession session = activeLockSessions.get(player.getUniqueId());
+        if (bestTarget == null) {
+            if (session != null) {
+                setLockTeam(player, session.target, "clear");
+                activeLockSessions.remove(player.getUniqueId());
+            }
+            return;
+        }
+
+        if (session == null || !bestTarget.equals(session.target)) {
+            if (session != null) {
+                setLockTeam(player, session.target, "clear");
+            }
+            session = new LockSession();
+            session.target = bestTarget;
+            session.startTime = System.currentTimeMillis();
+            activeLockSessions.put(player.getUniqueId(), session);
+        }
+
+        long elapsed = System.currentTimeMillis() - session.startTime;
+        double reqLockTimeMs = config.getLockTime() * 1000.0;
+        if (elapsed < reqLockTimeMs) {
+            if (!"soft".equals(session.lastStatus)) {
+                setLockTeam(player, bestTarget, "soft");
+                session.lastStatus = "soft";
+            }
+        } else {
+            if (!"full".equals(session.lastStatus)) {
+                setLockTeam(player, bestTarget, "full");
+                session.lastStatus = "full";
+            }
+        }
+    }
+
+    private void clearLockTarget(Player player) {
+        LockSession session = activeLockSessions.remove(player.getUniqueId());
+        if (session != null && session.target != null && session.target.isValid()) {
+            setLockTeam(player, session.target, "clear");
+        }
+    }
+
+    public static void sendGlowPacket(Player player, Entity entity, boolean glowing) {
+        try {
+            Object craftPlayer = player.getClass().getMethod("getHandle").invoke(player);
+            Object connection = craftPlayer.getClass().getField("connection").get(craftPlayer);
+            
+            int entityId = entity.getEntityId();
+            Class<?> dataValueClass = Class.forName("net.minecraft.network.syncher.SynchedEntityData$DataValue");
+            Class<?> serializersClass = Class.forName("net.minecraft.network.syncher.EntityDataSerializers");
+            Object byteSerializer = serializersClass.getField("BYTE").get(null);
+            
+            java.lang.reflect.Constructor<?> dataValueConstructor = dataValueClass.getConstructor(int.class, Class.forName("net.minecraft.network.syncher.EntityDataSerializer"), Object.class);
+            
+            byte flagValue = (byte) (glowing ? 0x40 : 0x00);
+            Object dataValue = dataValueConstructor.newInstance(0, byteSerializer, flagValue);
+            
+            List<Object> list = new ArrayList<>();
+            list.add(dataValue);
+            
+            Class<?> packetClass = Class.forName("net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket");
+            java.lang.reflect.Constructor<?> packetConstructor = packetClass.getConstructor(int.class, List.class);
+            Object packet = packetConstructor.newInstance(entityId, list);
+            
+            java.lang.reflect.Method sendMethod = connection.getClass().getMethod("send", Class.forName("net.minecraft.network.protocol.Packet"));
+            sendMethod.invoke(connection, packet);
+        } catch (Exception ignored) {}
+    }
+
+    public static void setLockTeam(Player player, Entity target, String lockStatus) {
+        org.bukkit.scoreboard.Scoreboard sb = player.getScoreboard();
+        if (sb == Bukkit.getScoreboardManager().getMainScoreboard()) {
+            sb = Bukkit.getScoreboardManager().getNewScoreboard();
+            player.setScoreboard(sb);
+        }
+        
+        for (org.bukkit.scoreboard.Team team : sb.getTeams()) {
+            if (team.getName().startsWith("bde_lock_")) {
+                team.removeEntry(target.getUniqueId().toString());
+                team.removeEntry(target.getName());
+            }
+        }
+        
+        if ("clear".equals(lockStatus)) {
+            sendGlowPacket(player, target, false);
+            return;
+        }
+        
+        String teamName = "bde_lock_" + lockStatus;
+        org.bukkit.scoreboard.Team team = sb.getTeam(teamName);
+        if (team == null) {
+            team = sb.registerNewTeam(teamName);
+            if ("soft".equals(lockStatus)) {
+                team.color(net.kyori.adventure.text.format.NamedTextColor.YELLOW);
+            } else if ("full".equals(lockStatus)) {
+                team.color(net.kyori.adventure.text.format.NamedTextColor.GREEN);
+            } else {
+                team.color(net.kyori.adventure.text.format.NamedTextColor.RED);
+            }
+        }
+        
+        team.addEntry(target.getUniqueId().toString());
+        team.addEntry(target.getName());
+        
+        sendGlowPacket(player, target, true);
+    }
+
+    private void updateSubsystemTransform(Display display, double scale, float mountHeight, BdeModel model, float yaw, float pitch, double subYaw, double subPitch, BdeModel.SubsystemConfig sub) {
+        BdeModel targetModel = model;
+        List<String> snbts = model.getPassengers();
+        int index = getPassengerIndexFromTags(display);
+
+        if (display.hasMetadata("bde_subsystem_model_id")) {
+            String subModelId = display.getMetadata("bde_subsystem_model_id").get(0).asString();
+            try {
+                targetModel = loadModelSync(subModelId);
+                snbts = targetModel.getPassengers();
+                index = display.getMetadata("bde_subsystem_index").get(0).asInt();
+            } catch (Exception e) {
+                return;
+            }
+        }
+
+        if (index < 0) return;
+        if (snbts == null) return;
+        List<String> flatSnbts = new ArrayList<>();
+        for (String s : snbts) {
+            List<String> split = splitObjects(s);
+            for (String p : split) {
+                collectAllPassengers(p, flatSnbts);
+            }
+        }
+        if (index >= flatSnbts.size()) return;
+        String snbt = flatSnbts.get(index);
+
+        int transIdx = snbt.indexOf("transformation:[");
+        if (transIdx != -1) {
+            int endTrans = snbt.indexOf("]", transIdx);
+            if (endTrans != -1) {
+                String matrixStr = snbt.substring(transIdx + 16, endTrans);
+                String[] parts = matrixStr.split(",");
+                if (parts.length == 16) {
+                    float[] m = new float[16];
+                    for (int i = 0; i < 16; i++) {
+                        String p = parts[i].trim().toLowerCase();
+                        if (p.endsWith("f")) p = p.substring(0, p.length() - 1);
+                        m[i] = Float.parseFloat(p);
+                    }
+
+                    Matrix4f matrix = new Matrix4f();
+                    matrix.setTransposed(m);
+
+                    Matrix4f scaledLocal = ModelTransformEngine.scaleMatrix(matrix, (float) scale);
+
+                    Matrix4f mPass = new Matrix4f();
+                    mPass.translation(0, -mountHeight, 0);
+
+                    if (!isVersion1_20_5_OrHigher()) {
+                        mPass.rotateY((float) Math.toRadians(-yaw));
+                    }
+                    mPass.rotateX((float) Math.toRadians(pitch));
+
+                    if (model.getFrontYawOffset() != 0.0) {
+                        mPass.rotateY((float) Math.toRadians(model.getFrontYawOffset()));
+                    }
+
+                    // Clamp relative yaw/pitch by FOV limits
+                    double relativeYaw = ((subYaw - yaw) % 360.0 + 540.0) % 360.0 - 180.0;
+                    if (sub.getFovMinYaw() != null) relativeYaw = Math.max(sub.getFovMinYaw(), relativeYaw);
+                    if (sub.getFovMaxYaw() != null) relativeYaw = Math.min(sub.getFovMaxYaw(), relativeYaw);
+                    double relativePitch = subPitch;
+                    if (sub.getFovMinPitch() != null) relativePitch = Math.max(sub.getFovMinPitch(), relativePitch);
+                    if (sub.getFovMaxPitch() != null) relativePitch = Math.min(sub.getFovMaxPitch(), relativePitch);
+
+                    // Compute translation: seatOffset back to vehicle origin, then mountOffset
+                    float dx = 0.0f;
+                    float dy = 0.0f;
+                    float dz = 0.0f;
+
+                    if (display.hasMetadata("bde_subsystem_model_id")) {
+                        float mx = 0.0f;
+                        float my = 0.0f;
+                        float mz = 0.0f;
+                        if (sub.getMountOffset() != null && sub.getMountOffset().size() == 3) {
+                            mx = (float) (sub.getMountOffset().get(0) * scale);
+                            my = (float) (sub.getMountOffset().get(1) * scale);
+                            mz = (float) (sub.getMountOffset().get(2) * scale);
+                        }
+                        float sx = 0.0f;
+                        float sy = 0.0f;
+                        float sz = 0.0f;
+                        if (model.getSeatOffset() != null && model.getSeatOffset().size() == 3) {
+                            sx = (float) (model.getSeatOffset().get(0) * scale);
+                            sy = (float) (model.getSeatOffset().get(1) * scale);
+                            sz = (float) (model.getSeatOffset().get(2) * scale);
+                        }
+                        dx = mx - sx;
+                        dy = my - sy;
+                        dz = mz - sz;
+                    } else {
+                        // Standard subsystem: translate back by seatOffset to rotate around vehicle origin (or seat)
+                        if (model.getSeatOffset() != null && model.getSeatOffset().size() == 3) {
+                            dx = (float) (-model.getSeatOffset().get(0) * scale);
+                            dy = (float) (-model.getSeatOffset().get(1) * scale);
+                            dz = (float) (-model.getSeatOffset().get(2) * scale);
+                        }
+                    }
+
+                    mPass.translate(dx, dy, dz);
+
+                    float px = 0.0f;
+                    float py = 0.0f;
+                    float pz = 0.0f;
+                    boolean hasPivot = sub.getPivotOffset() != null && sub.getPivotOffset().size() == 3;
+                    if (hasPivot) {
+                        px = (float) (sub.getPivotOffset().get(0) * scale);
+                        py = (float) (sub.getPivotOffset().get(1) * scale);
+                        pz = (float) (sub.getPivotOffset().get(2) * scale);
+                        mPass.translate(px, py, pz);
+                    }
+
+                    mPass.rotateY((float) Math.toRadians(-relativeYaw));
+                    mPass.rotateX((float) Math.toRadians(relativePitch));
+
+                    if (hasPivot) {
+                        mPass.translate(-px, -py, -pz);
+                    }
+
+                    mPass.mul(scaledLocal);
+
+                    Transformation transformation = ModelTransformEngine.decomposeToTransformation(mPass);
+                    display.setTransformation(transformation);
+                }
+            }
+        }
+    }
+
+    public void triggerSubsystemAction(ModelInstance instance, BdeModel.SubsystemConfig sub, Player player) {
+        List<BdeModel.ProjectileConfig> modes = sub.getWeaponModes();
+        if (modes.isEmpty()) return;
+
+        int modeIdx = instance.getSubsystemMode(player.getUniqueId(), sub.getName());
+        BdeModel.ProjectileConfig config = modes.get(modeIdx);
+
+        UUID pId = player.getUniqueId();
+        Map<String, Long> playerCooldowns = subsystemCooldowns.computeIfAbsent(pId, k -> new HashMap<>());
+        long now = System.currentTimeMillis();
+        long lastUse = playerCooldowns.getOrDefault(sub.getName() + "_" + config.getName(), 0L);
+        if (now - lastUse < (long) (config.getCooldown() * 1000.0)) {
+            return;
+        }
+        playerCooldowns.put(sub.getName() + "_" + config.getName(), now);
+
+        try {
+            org.bukkit.Sound sound = org.bukkit.Sound.valueOf(config.getLaunchSound().toUpperCase());
+            player.getWorld().playSound(player.getLocation(), sound, config.getLaunchVolume(), config.getLaunchPitch());
+        } catch (IllegalArgumentException ignored) {}
+
+        Location launchLoc = player.getEyeLocation();
+        Entity vehicleRoot = instance.getVehicleRoot();
+        double scale = instance.getScale();
+        
+        if (sub.getLaunchOffset() != null && sub.getLaunchOffset().size() == 3 && vehicleRoot != null) {
+            double subYaw;
+            double subPitch;
+            if (instance.isSubsystemWasdAiming(sub.getName())) {
+                subYaw = instance.getSubsystemAimYaw(sub.getName(), vehicleRoot.getLocation().getYaw());
+                subPitch = instance.getSubsystemAimPitch(sub.getName(), 0.0);
+            } else {
+                subYaw = player.getLocation().getYaw();
+                subPitch = player.getLocation().getPitch();
+            }
+            double relativeYaw = ((subYaw - vehicleRoot.getLocation().getYaw()) % 360.0 + 540.0) % 360.0 - 180.0;
+            if (sub.getFovMinYaw() != null) relativeYaw = Math.max(sub.getFovMinYaw(), relativeYaw);
+            if (sub.getFovMaxYaw() != null) relativeYaw = Math.min(sub.getFovMaxYaw(), relativeYaw);
+            double relativePitch = subPitch;
+            if (sub.getFovMinPitch() != null) relativePitch = Math.max(sub.getFovMinPitch(), relativePitch);
+            if (sub.getFovMaxPitch() != null) relativePitch = Math.min(sub.getFovMaxPitch(), relativePitch);
+
+            List<Double> mountOffset = sub.getMountOffset();
+            if (mountOffset == null || mountOffset.isEmpty()) {
+                mountOffset = getSubsystemOffset(instance.getModel(), sub.getDisplayTag());
+            }
+
+            launchLoc = ModelTransformEngine.getSubsystemComponentPosition(
+                vehicleRoot.getLocation(),
+                mountOffset,
+                sub.getLaunchOffset(),
+                instance.getModel().getSeatOffset(),
+                scale,
+                instance.getModel().getFrontYawOffset(),
+                vehicleRoot.getLocation().getYaw(),
+                vehicleRoot.getLocation().getPitch(),
+                relativeYaw,
+                relativePitch,
+                sub.getPivotOffset()
+            );
+        } else {
+            List<Display> subDisplays = new ArrayList<>();
+            int subIdx = instance.getModel().getVehicle().getSubsystems().indexOf(sub);
+            for (Display display : instance.getPassengers()) {
+                if (sub.getDisplayTag() != null && !sub.getDisplayTag().isEmpty() && display.getScoreboardTags().contains(sub.getDisplayTag())) {
+                    subDisplays.add(display);
+                } else if (display.hasMetadata("bde_subsystem_parent_index") &&
+                           display.getMetadata("bde_subsystem_parent_index").get(0).asInt() == subIdx) {
+                    subDisplays.add(display);
+                }
+            }
+            if (!subDisplays.isEmpty()) {
+                launchLoc = subDisplays.get(0).getLocation().clone();
+                org.bukkit.util.Vector dir = player.getLocation().getDirection();
+                launchLoc.add(dir.clone().multiply(0.8));
+            } else {
+                org.bukkit.util.Vector dir = player.getLocation().getDirection();
+                launchLoc.add(dir.clone().multiply(0.8));
+            }
+        }
+
+        org.bukkit.util.Vector velocity = player.getLocation().getDirection().multiply(config.getSpeed());
+
+        Entity target = null;
+        boolean fullLock = false;
+        Location targetCoord = null;
+        if (config.isLockOn()) {
+            LockSession session = activeLockSessions.get(player.getUniqueId());
+            if (session != null && session.target != null && session.target.isValid()) {
+                target = session.target;
+                long elapsed = System.currentTimeMillis() - session.startTime;
+                if (elapsed >= config.getLockTime() * 1000.0) {
+                    fullLock = true;
+                } else {
+                    targetCoord = target.getLocation().add(0, target.getHeight() / 2, 0);
+                }
+            }
+        }
+
+        // Ray style weapon (laser)
+        if ("laser".equalsIgnoreCase(config.getOnHit())) {
+            // Draw a laser beam line and damage entities
+            org.bukkit.World world = launchLoc.getWorld();
+            org.bukkit.util.Vector dir = player.getLocation().getDirection();
+            double maxDist = config.getLockRange() > 0 ? config.getLockRange() : 30.0;
+            
+            for (double d = 0.5; d < maxDist; d += 0.5) {
+                Location particleLoc = launchLoc.clone().add(dir.clone().multiply(d));
+                if (config.getFlyParticle() != null && !config.getFlyParticle().isEmpty()) {
+                    try {
+                        org.bukkit.Particle p = org.bukkit.Particle.valueOf(config.getFlyParticle().toUpperCase());
+                        world.spawnParticle(p, particleLoc, config.getFlyParticleCount(), 0, 0, 0, 0);
+                    } catch (IllegalArgumentException ignored) {}
+                }
+
+                java.util.Collection<org.bukkit.entity.Entity> entities = world.getNearbyEntities(particleLoc, 0.4, 0.4, 0.4);
+                boolean hit = false;
+                for (org.bukkit.entity.Entity entity : entities) {
+                    if (entity.equals(player) || entity.equals(instance.getVehicleRoot()) || instance.getPassengerSeats().contains(entity) || instance.getHitboxes().contains(entity) || entity.equals(instance.getDriverSeat())) {
+                        continue;
+                    }
+                    
+                    if (entity instanceof org.bukkit.entity.LivingEntity) {
+                        ((org.bukkit.entity.LivingEntity) entity).damage(config.getDamage(), player);
+                        hit = true;
+                    } else if (entity instanceof Interaction && entity.getScoreboardTags().contains("bde_root")) {
+                        ModelInstance hitInstance = getInstanceByRoot(entity);
+                        if (hitInstance != null) {
+                            double hp = hitInstance.getCurrentHp();
+                            hp = Math.max(0.0, hp - config.getDamage());
+                            hitInstance.setCurrentHp(hp);
+                            Location hitLoc = entity.getLocation();
+                            hitLoc.getWorld().playSound(hitLoc, org.bukkit.Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+                            try {
+                                hitLoc.getWorld().spawnParticle(org.bukkit.Particle.valueOf("DAMAGE_INDICATOR"), hitLoc, 5, 0.2, 0.2, 0.2, 0.1);
+                            } catch (Exception ignored) {}
+                            if (hp <= 0.0) {
+                                hitLoc.getWorld().createExplosion(hitLoc, 2.0f, false, false);
+                                removeInstance(hitInstance.getId());
+                            }
+                            hit = true;
+                        }
+                    }
+                }
+                if (hit) break;
+            }
+            return;
+        }
+
+        if (config.getBdeModelId() != null && !config.getBdeModelId().isEmpty()) {
+            org.bukkit.entity.Snowball base = launchLoc.getWorld().spawn(launchLoc, org.bukkit.entity.Snowball.class);
+            base.setGravity(false);
+            base.setSilent(true);
+            base.setShooter(player);
+            base.setVelocity(velocity);
+
+            org.bukkit.entity.BlockDisplay display = launchLoc.getWorld().spawn(launchLoc, org.bukkit.entity.BlockDisplay.class);
+            display.setBlock(Bukkit.createBlockData("minecraft:stone"));
+            display.setTeleportDuration(1);
+            display.setInterpolationDuration(1);
+            display.setInterpolationDelay(0);
+
+            try {
+                BdeModel projModel = loadModelSync(config.getBdeModelId());
+                if (projModel != null && projModel.getPassengers() != null && !projModel.getPassengers().isEmpty()) {
+                    String firstPassenger = splitObjects(projModel.getPassengers().get(0)).get(0);
+                    applyBlockDisplayData(display, firstPassenger, 1.0);
+                    applyTransformation(display, firstPassenger, 1.0, 0f, projModel, false, (float) launchLoc.getYaw(), (float) launchLoc.getPitch(), false);
+                }
+            } catch (Exception ignored) {}
+
+            CustomProjectile customProj = new CustomProjectile(base, display, player, config, velocity, target, fullLock, targetCoord);
+            activeProjectiles.add(customProj);
+        } else {
+            org.bukkit.entity.Snowball base = launchLoc.getWorld().spawn(launchLoc, org.bukkit.entity.Snowball.class);
+            base.setGravity(config.isHasGravity());
+            base.setShooter(player);
+            base.setVelocity(velocity);
+
+            CustomProjectile customProj = new CustomProjectile(base, null, player, config, velocity, target, fullLock, targetCoord);
+            activeProjectiles.add(customProj);
+        }
+    }
+
+    public void giveSubsystemControllerItem(Player player, ModelInstance instance, int passengerIndex) {
+        BdeModel.VehicleConfig vehicle = instance.getModel().getVehicle();
+        if (vehicle == null || vehicle.getSubsystems() == null) return;
+        
+        BdeModel.SubsystemConfig sub = null;
+        for (BdeModel.SubsystemConfig s : vehicle.getSubsystems()) {
+            if (s.getControllerSeatIndex() == passengerIndex) {
+                sub = s;
+                break;
+            }
+        }
+        if (sub == null) return;
+        
+        // Save current item
+        int slot = player.getInventory().getHeldItemSlot();
+        org.bukkit.inventory.ItemStack current = player.getInventory().getItem(slot);
+        if (current != null && current.getType() != org.bukkit.Material.AIR) {
+            originalHotbarItems.put(player.getUniqueId(), current.clone());
+        } else {
+            originalHotbarItems.put(player.getUniqueId(), new org.bukkit.inventory.ItemStack(org.bukkit.Material.AIR));
+        }
+        
+        // Give control item
+        org.bukkit.inventory.ItemStack controllerItem = createControllerItem(sub, instance, player.getUniqueId());
+        player.getInventory().setItem(slot, controllerItem);
+    }
+    
+    public org.bukkit.inventory.ItemStack createControllerItem(BdeModel.SubsystemConfig sub, ModelInstance instance, UUID playerId) {
+        org.bukkit.inventory.ItemStack item = new org.bukkit.inventory.ItemStack(org.bukkit.Material.BLAZE_ROD);
+        org.bukkit.inventory.meta.ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.setDisplayName("§e§lSubsystem Operator Controls");
+            List<String> lore = new ArrayList<>();
+            String weaponName = "None";
+            if (sub.getWeaponModes() != null && !sub.getWeaponModes().isEmpty()) {
+                int modeIdx = instance.getSubsystemMode(playerId, sub.getName());
+                weaponName = sub.getWeaponModes().get(modeIdx).getName();
+            }
+            lore.add("§7Current Weapon: §f" + weaponName);
+            lore.add("§7------------------------");
+            lore.add("§7Left Click: Fire main gun");
+            lore.add("§7Scroll Wheel: Cycle weapons");
+            lore.add("§7Q Key: Toggle Camera/WASD Aiming");
+            lore.add("§7F Key: Toggle Weapon-Cam View");
+            lore.add("§7Shift: Dismount/Exit seat");
+            meta.setLore(lore);
+            item.setItemMeta(meta);
+        }
+        return item;
+    }
+    
+    public void restorePlayerItem(Player player) {
+        org.bukkit.inventory.ItemStack original = originalHotbarItems.remove(player.getUniqueId());
+        if (original != null) {
+            int slot = player.getInventory().getHeldItemSlot();
+            player.getInventory().setItem(slot, original.getType() == org.bukkit.Material.AIR ? null : original);
+        }
+    }
+
+    public org.bukkit.inventory.ItemStack getOriginalHotbarItem(UUID playerId) {
+        return originalHotbarItems.get(playerId);
+    }
+    
+    public void clearOriginalHotbarItem(UUID playerId) {
+        originalHotbarItems.remove(playerId);
+    }
+
+    public void startPlacementSession(Player player, UUID instanceId, String vehicleModelId, int subIdx) {
+        BdeModel model;
+        try {
+            model = loadModelSync(vehicleModelId);
+        } catch (Exception e) {
+            player.sendMessage("§cFailed to load vehicle model config: " + e.getMessage());
+            return;
+        }
+
+        BdeModel.SubsystemConfig sub = model.getVehicle().getSubsystems().get(subIdx);
+
+        PlacementSession session = new PlacementSession(instanceId, subIdx);
+        session.vehicleModelId = vehicleModelId;
+
+        ModelInstance instance = instanceId != null ? activeInstances.get(instanceId) : null;
+        if (instance != null) {
+            session.vehicleOriginalLoc = instance.getLocation().clone();
+            session.vehicleOriginalScale = instance.getScale();
+            // Temporarily despawn vehicle
+            removeInstance(instanceId);
+        } else {
+            Location loc = player.getLocation().clone();
+            loc.setPitch(0.0f);
+            session.vehicleOriginalLoc = loc;
+            session.vehicleOriginalScale = 1.0;
+        }
+
+        // Subsystem floating in air setup: 4 blocks in front of the player, aligned to world grid (yaw=0, pitch=0)
+        Location origin = player.getEyeLocation().add(player.getLocation().getDirection().multiply(4.0));
+        origin.setYaw(0.0f);
+        origin.setPitch(0.0f);
+        session.subsystemOriginWorldLoc = origin;
+
+        // Spawn subsystem BDE model floating in the air for Stage 1 & 2
+        if (sub.getBdeModelId() != null && !sub.getBdeModelId().isEmpty()) {
+            try {
+                BdeModel subModel = loadModelSync(sub.getBdeModelId());
+                ModelInstance subInst = spawnModel(subModel, origin, session.vehicleOriginalScale);
+                session.tempSubsystemInstanceId = subInst.getId();
+            } catch (Exception e) {
+                player.sendMessage("§cFailed to spawn subsystem preview model: " + e.getMessage());
+            }
+        }
+
+        placementSessions.put(player.getUniqueId(), session);
+        player.closeInventory();
+        
+        player.sendMessage("§eInteractive Placement Mode started!");
+        player.sendMessage("§fStage 1: §b§lPivot Point Offset §7- Move crosshair/scroll to set the rotation center on the floating subsystem.");
+        player.sendMessage("§7Scroll mouse wheel to adjust distance from your eyes.");
+        player.sendMessage("§7Left Click: Save Pivot | Shift+Left Click: Cancel");
+    }
+
+    public boolean isEditingPlacement(Player player) {
+        return placementSessions.containsKey(player.getUniqueId());
+    }
+
+    public void cancelPlacementSession(Player player) {
+        PlacementSession session = placementSessions.remove(player.getUniqueId());
+        if (session != null) {
+            if (session.tempSubsystemInstanceId != null) {
+                removeInstance(session.tempSubsystemInstanceId);
+            }
+            if (session.vehicleOriginalLoc != null && session.vehicleModelId != null) {
+                try {
+                    BdeModel m = loadModelSync(session.vehicleModelId);
+                    ModelInstance restored = spawnModel(m, session.vehicleOriginalLoc, session.vehicleOriginalScale);
+                    plugin.getBdeGuiManager().selectModel(player, restored.getId());
+                    plugin.getBdeGuiManager().openSubsystemDetailMenu(player, restored, m, m.getProjectId(), session.subsystemIndex);
+                } catch (Exception ignored) {}
+            } else {
+                ModelInstance inst = activeInstances.get(session.instanceId);
+                if (inst != null) {
+                    try {
+                        BdeModel m = loadModelSync(inst.getModel().getProjectId());
+                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, inst, m, m.getProjectId(), session.subsystemIndex);
+                    } catch (Exception ignored) {}
+                }
+            }
+            player.sendMessage("§cPlacement mode cancelled.");
+        }
+    }
+
+    public void advancePlacementStep(Player player) {
+        PlacementSession session = placementSessions.get(player.getUniqueId());
+        if (session == null) return;
+
+        BdeModel model;
+        try {
+            model = loadModelSync(session.vehicleModelId);
+        } catch (Exception e) {
+            placementSessions.remove(player.getUniqueId());
+            player.sendMessage("§cFailed to load vehicle model: " + e.getMessage());
+            return;
+        }
+
+        BdeModel.SubsystemConfig sub = model.getVehicle().getSubsystems().get(session.subsystemIndex);
+
+        player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.8f, 1.0f);
+
+        if (session.step == PlacementStep.PIVOT_OFFSET) {
+            // Stage 1 (Pivot Offset) complete ➡️ Stage 2 (Muzzle/Launch Point)
+            session.step = PlacementStep.LAUNCH_POINT;
+            player.sendMessage("§fStage 2: §6§lMuzzle Point §7- Position the projectile firing origin on the floating subsystem.");
+            player.sendMessage("§7Left Click: Save Muzzle | Shift+Left Click: Cancel");
+
+        } else if (session.step == PlacementStep.LAUNCH_POINT) {
+            // Stage 2 (Muzzle Point) complete ➡️ Stage 3 (Mount Point)
+            if (session.tempSubsystemInstanceId != null) {
+                removeInstance(session.tempSubsystemInstanceId);
+                session.tempSubsystemInstanceId = null;
+            }
+
+            // Spawn the vehicle back
+            try {
+                ModelInstance vehicleInst = spawnModel(model, session.vehicleOriginalLoc, session.vehicleOriginalScale);
+                session.instanceId = vehicleInst.getId();
+                plugin.getBdeGuiManager().selectModel(player, vehicleInst.getId());
+            } catch (Exception e) {
+                player.sendMessage("§cFailed to spawn vehicle model: " + e.getMessage());
+                placementSessions.remove(player.getUniqueId());
+                return;
+            }
+
+            session.step = PlacementStep.MOUNT_POINT;
+            player.sendMessage("§fStage 3: §a§lMount Point §7- Look at the vehicle chassis to place the turret base (snaps at pivot point).");
+            player.sendMessage("§7Left Click: Save Mount | Shift+Left Click: Cancel");
+
+        } else if (session.step == PlacementStep.MOUNT_POINT) {
+            // Stage 3 (Mount Point) complete ➡️ Stage 4 (Spectator Camera)
+            session.step = PlacementStep.CAMERA_OFFSET;
+            player.sendMessage("§fStage 4: §a§lSpectator Camera §7- Position the first-person spectator view position.");
+            player.sendMessage("§7Left Click: Save Camera | Shift+Left Click: Cancel");
+
+        } else if (session.step == PlacementStep.CAMERA_OFFSET) {
+            // Placement completed successfully!
+            placementSessions.remove(player.getUniqueId());
+
+            if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
+                saveModelConfig(model);
+            }
+
+            ModelInstance vehicleInstance = activeInstances.get(session.instanceId);
+            Location currentLoc = vehicleInstance != null ? vehicleInstance.getLocation() : session.vehicleOriginalLoc;
+            double currentScale = vehicleInstance != null ? vehicleInstance.getScale() : session.vehicleOriginalScale;
+
+            if (vehicleInstance != null) {
+                removeInstance(vehicleInstance.getId());
+            }
+
+            ModelInstance newInstance = spawnModel(model, currentLoc, currentScale);
+            plugin.getBdeGuiManager().selectModel(player, newInstance.getId());
+
+            player.sendMessage("§a§lPlacement Complete! Subsystem pivot, mount, launch, and camera offsets configured successfully.");
+            player.playSound(player.getLocation(), org.bukkit.Sound.UI_TOAST_CHALLENGE_COMPLETE, 0.8f, 1.2f);
+
+            try {
+                BdeModel updated = loadModelSync(model.getProjectId());
+                plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInstance, updated, model.getProjectId(), session.subsystemIndex);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private void runPlacementTickTask() {
+        new org.bukkit.scheduler.BukkitRunnable() {
+            @Override
+            public void run() {
+                for (Map.Entry<UUID, PlacementSession> entry : placementSessions.entrySet()) {
+                    Player player = Bukkit.getPlayer(entry.getKey());
+                    if (player == null || !player.isOnline()) {
+                        placementSessions.remove(entry.getKey());
+                        continue;
+                    }
+
+                    PlacementSession session = entry.getValue();
+                    BdeModel model;
+                    BdeModel.SubsystemConfig sub;
+                    try {
+                        model = loadModelSync(session.vehicleModelId);
+                        sub = model.getVehicle().getSubsystems().get(session.subsystemIndex);
+                    } catch (Exception e) {
+                        placementSessions.remove(entry.getKey());
+                        continue;
+                    }
+
+                    Location rootLoc = null;
+                    double scale = session.vehicleOriginalScale;
+
+                    if (session.step == PlacementStep.MOUNT_POINT || session.step == PlacementStep.CAMERA_OFFSET) {
+                        ModelInstance instance = activeInstances.get(session.instanceId);
+                        if (instance == null || instance.getVehicleRoot() == null) {
+                            placementSessions.remove(entry.getKey());
+                            player.sendMessage("§cVehicle instance lost. Placement mode cancelled.");
+                            continue;
+                        }
+                        rootLoc = instance.getVehicleRoot().getLocation();
+                        scale = instance.getScale();
+                    } else {
+                        // For PIVOT_OFFSET and LAUNCH_POINT, the floating sub-model's displays
+                        // ride as passengers at mountHeight above the armor_stand feet.
+                        // We need to measure coordinates from that riding position, not the feet,
+                        // because updateSubsystemTransform cancels out the vehicle's mountHeight
+                        // and applies pivotOffset relative to the mount point (display space).
+                        ModelInstance tempSub = session.tempSubsystemInstanceId != null ? activeInstances.get(session.tempSubsystemInstanceId) : null;
+                        if (tempSub != null && tempSub.getVehicleRoot() != null) {
+                            BdeModel subModel = tempSub.getModel();
+                            BoundingBox subBox = calculateModelBounds(subModel, scale);
+                            float subMountHeight = getMountHeight(tempSub.getVehicleRoot(), Math.max(0.1f, subBox.maxY));
+                            rootLoc = session.subsystemOriginWorldLoc.clone().add(0, subMountHeight, 0);
+                        } else {
+                            rootLoc = session.subsystemOriginWorldLoc;
+                        }
+                    }
+
+                    if (rootLoc == null) continue;
+
+                    Location eye = player.getEyeLocation();
+                    org.bukkit.util.Vector dir = player.getLocation().getDirection();
+                    Location hitLoc = eye.clone().add(dir.clone().multiply(session.distance));
+
+                    double dx = hitLoc.getX() - rootLoc.getX();
+                    double dy = hitLoc.getY() - rootLoc.getY();
+                    double dz = hitLoc.getZ() - rootLoc.getZ();
+
+                    double rx = dx;
+                    double ry = dy;
+                    double rz = dz;
+
+                    if (session.step == PlacementStep.MOUNT_POINT || session.step == PlacementStep.CAMERA_OFFSET) {
+                        double revYawRad = Math.toRadians(-rootLoc.getYaw());
+                        double cos = Math.cos(revYawRad);
+                        double sin = Math.sin(revYawRad);
+                        rx = dx * cos - dz * sin;
+                        ry = dy;
+                        rz = dx * sin + dz * cos;
+
+                        double frontYawOffset = model.getFrontYawOffset();
+                        if (frontYawOffset != 0.0) {
+                            double radFront = Math.toRadians(-frontYawOffset);
+                            double cosF = Math.cos(radFront);
+                            double sinF = Math.sin(radFront);
+                            double tempX = rx * cosF - rz * sinF;
+                            rz = rx * sinF + rz * cosF;
+                            rx = tempX;
+                        }
+                    }
+
+                    rx /= scale;
+                    ry /= scale;
+                    rz /= scale;
+
+                    double snap = 0.05;
+                    rx = Math.round(rx / snap) * snap;
+                    ry = Math.round(ry / snap) * snap;
+                    rz = Math.round(rz / snap) * snap;
+
+                    // Store un-locked snapped values for lock command capture
+                    session.lastRx = rx;
+                    session.lastRy = ry;
+                    session.lastRz = rz;
+
+                    // Apply axis locking
+                    if (session.lockedAxes.contains("x")) {
+                        rx = session.lockedValues.getOrDefault("x", rx);
+                    }
+                    if (session.lockedAxes.contains("y")) {
+                        ry = session.lockedValues.getOrDefault("y", ry);
+                    }
+                    if (session.lockedAxes.contains("z")) {
+                        rz = session.lockedValues.getOrDefault("z", rz);
+                    }
+
+                    String lockedStr = session.lockedAxes.isEmpty() ? "" : " §7[Locked: " + session.lockedAxes + "]";
+
+                    if (session.step == PlacementStep.PIVOT_OFFSET) {
+                        List<Double> mount = sub.getMountOffset();
+                        if (mount == null || mount.size() != 3) {
+                            mount = java.util.Arrays.asList(0.0, 0.0, 0.0);
+                            sub.setMountOffset(mount);
+                        }
+                        double mx = mount.get(0);
+                        double my = mount.get(1);
+                        double mz = mount.get(2);
+
+                        double px = rx - mx;
+                        double py = ry - my;
+                        double pz = rz - mz;
+
+                        px = Math.round(px / snap) * snap;
+                        py = Math.round(py / snap) * snap;
+                        pz = Math.round(pz / snap) * snap;
+
+                        List<Double> pivot = java.util.Arrays.asList(px, py, pz);
+                        sub.setPivotOffset(pivot);
+
+                        player.sendActionBar(Component.text("§b§lPivot Offset: §f" + String.format("%.2f, %.2f, %.2f", px, py, pz) + lockedStr + " §7| §aLeft Click: Save §7| §cShift+Left Click: Cancel"));
+
+                        Location pMount = ModelTransformEngine.getSubsystemComponentPosition(
+                            rootLoc,
+                            mount,
+                            java.util.Arrays.asList(0.0, 0.0, 0.0),
+                            null,
+                            scale,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            null
+                        );
+                        Location pPivot = ModelTransformEngine.getSubsystemComponentPosition(
+                            rootLoc,
+                            mount,
+                            pivot,
+                            null,
+                            scale,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            null
+                        );
+
+                        try {
+                            drawParticleLine(player, pMount, pPivot, org.bukkit.Particle.valueOf("HAPPY_VILLAGER"));
+                        } catch (Exception ignored) {}
+
+                    } else if (session.step == PlacementStep.LAUNCH_POINT) {
+                        List<Double> mount = sub.getMountOffset();
+                        List<Double> pivot = sub.getPivotOffset();
+                        double mx = mount != null && mount.size() == 3 ? mount.get(0) : 0.0;
+                        double my = mount != null && mount.size() == 3 ? mount.get(1) : 0.0;
+                        double mz = mount != null && mount.size() == 3 ? mount.get(2) : 0.0;
+
+                        double lx = rx - mx;
+                        double ly = ry - my;
+                        double lz = rz - mz;
+
+                        lx = Math.round(lx / snap) * snap;
+                        ly = Math.round(ly / snap) * snap;
+                        lz = Math.round(lz / snap) * snap;
+
+                        List<Double> launch = java.util.Arrays.asList(lx, ly, lz);
+                        sub.setLaunchOffset(launch);
+
+                        player.sendActionBar(Component.text("§6§lMuzzle Point: §f" + String.format("%.2f, %.2f, %.2f", lx, ly, lz) + lockedStr + " §7| §aLeft Click: Save §7| §cShift+Left Click: Cancel"));
+
+                        Location pPivot = ModelTransformEngine.getSubsystemComponentPosition(
+                            rootLoc,
+                            mount,
+                            pivot != null ? pivot : java.util.Arrays.asList(0.0, 0.0, 0.0),
+                            null,
+                            scale,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            pivot
+                        );
+                        Location pMuzzle = ModelTransformEngine.getSubsystemComponentPosition(
+                            rootLoc,
+                            mount,
+                            launch,
+                            null,
+                            scale,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            pivot
+                        );
+
+                        try {
+                            drawParticleLine(player, pPivot, pMuzzle, org.bukkit.Particle.valueOf("FLAME"));
+                        } catch (Exception ignored) {}
+
+                    } else if (session.step == PlacementStep.MOUNT_POINT) {
+                        List<Double> pivot = sub.getPivotOffset();
+                        double px = pivot != null && pivot.size() == 3 ? pivot.get(0) : 0.0;
+                        double py = pivot != null && pivot.size() == 3 ? pivot.get(1) : 0.0;
+                        double pz = pivot != null && pivot.size() == 3 ? pivot.get(2) : 0.0;
+
+                        double mx = rx - px;
+                        double my = ry - py;
+                        double mz = rz - pz;
+
+                        mx = Math.round(mx / snap) * snap;
+                        my = Math.round(my / snap) * snap;
+                        mz = Math.round(mz / snap) * snap;
+
+                        List<Double> mount = java.util.Arrays.asList(mx, my, mz);
+                        sub.setMountOffset(mount);
+
+                        player.sendActionBar(Component.text("§e§lMount Point: §f" + String.format("%.2f, %.2f, %.2f", mx, my, mz) + lockedStr + " §7| §aLeft Click: Save §7| §cShift+Left Click: Cancel"));
+
+                        Location pPivot = ModelTransformEngine.getSubsystemComponentPosition(
+                            rootLoc,
+                            mount,
+                            pivot,
+                            model.getSeatOffset(),
+                            scale,
+                            model.getFrontYawOffset(),
+                            rootLoc.getYaw(),
+                            rootLoc.getPitch(),
+                            0.0,
+                            0.0,
+                            pivot
+                        );
+                        try {
+                            player.spawnParticle(org.bukkit.Particle.valueOf("HAPPY_VILLAGER"), pPivot, 2, 0.0, 0.0, 0.0, 0.0);
+                        } catch (Exception ignored) {}
+
+                    } else if (session.step == PlacementStep.CAMERA_OFFSET) {
+                        List<Double> mount = sub.getMountOffset();
+                        List<Double> pivot = sub.getPivotOffset();
+                        double mx = mount != null && mount.size() == 3 ? mount.get(0) : 0.0;
+                        double my = mount != null && mount.size() == 3 ? mount.get(1) : 0.0;
+                        double mz = mount != null && mount.size() == 3 ? mount.get(2) : 0.0;
+
+                        double cx = rx - mx;
+                        double cy = ry - my;
+                        double cz = rz - mz;
+
+                        cx = Math.round(cx / snap) * snap;
+                        cy = Math.round(cy / snap) * snap;
+                        cz = Math.round(cz / snap) * snap;
+
+                        List<Double> camera = java.util.Arrays.asList(cx, cy, cz);
+                        sub.setCameraOffset(camera);
+
+                        player.sendActionBar(Component.text("§a§lCamera View: §f" + String.format("%.2f, %.2f, %.2f", cx, cy, cz) + lockedStr + " §7| §aLeft Click: Save §7| §cShift+Left Click: Cancel"));
+
+                        Location pMount = ModelTransformEngine.getSubsystemComponentPosition(
+                            rootLoc,
+                            mount,
+                            java.util.Arrays.asList(0.0, 0.0, 0.0),
+                            model.getSeatOffset(),
+                            scale,
+                            model.getFrontYawOffset(),
+                            rootLoc.getYaw(),
+                            rootLoc.getPitch(),
+                            0.0,
+                            0.0,
+                            pivot
+                        );
+                        Location pCam = ModelTransformEngine.getSubsystemComponentPosition(
+                            rootLoc,
+                            mount,
+                            camera,
+                            model.getSeatOffset(),
+                            scale,
+                            model.getFrontYawOffset(),
+                            rootLoc.getYaw(),
+                            rootLoc.getPitch(),
+                            0.0,
+                            0.0,
+                            pivot
+                        );
+
+                        try {
+                            drawParticleLine(player, pMount, pCam, org.bukkit.Particle.valueOf("HAPPY_VILLAGER"));
+                        } catch (Exception ignored) {}
+                    }
+
+                    if (session.step == PlacementStep.MOUNT_POINT || session.step == PlacementStep.CAMERA_OFFSET) {
+                        ModelInstance instance = activeInstances.get(session.instanceId);
+                        if (instance != null) {
+                            List<Display> subDisplays = new ArrayList<>();
+                            int subIdx = model.getVehicle().getSubsystems().indexOf(sub);
+                            for (Display display : instance.getPassengers()) {
+                                if (sub.getDisplayTag() != null && !sub.getDisplayTag().isEmpty() && display.getScoreboardTags().contains(sub.getDisplayTag())) {
+                                    subDisplays.add(display);
+                                } else if (display.hasMetadata("bde_subsystem_parent_index") &&
+                                           display.getMetadata("bde_subsystem_parent_index").get(0).asInt() == subIdx) {
+                                    subDisplays.add(display);
+                                }
+                            }
+                            float mHeight = getMountHeight(instance.getVehicleRoot(), Math.max(0.1f, calculateModelBounds(model, scale).maxY));
+                            for (Display display : subDisplays) {
+                                updateSubsystemTransform(display, scale, mHeight, model, (float) rootLoc.getYaw(), (float) rootLoc.getPitch(), rootLoc.getYaw(), 0.0, sub);
+                            }
+                        }
+                    } else {
+                        ModelInstance tempSub = session.tempSubsystemInstanceId != null ? activeInstances.get(session.tempSubsystemInstanceId) : null;
+                        if (tempSub != null && tempSub.getVehicleRoot() != null) {
+                            tempSub.getVehicleRoot().teleport(session.subsystemOriginWorldLoc);
+                        }
+                    }
+                }
+            }
+        }.runTaskTimer(plugin, 0L, 1L);
+    }
+    
+    private void drawParticleLine(Player player, Location start, Location end, org.bukkit.Particle particle) {
+        double distance = start.distance(end);
+        org.bukkit.util.Vector vector = end.toVector().subtract(start.toVector()).normalize();
+        for (double d = 0; d < distance; d += 0.2) {
+            Location point = start.clone().add(vector.clone().multiply(d));
+            player.spawnParticle(particle, point, 1, 0.0, 0.0, 0.0, 0.0);
+        }
     }
 }

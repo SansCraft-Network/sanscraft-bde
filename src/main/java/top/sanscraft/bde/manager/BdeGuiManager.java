@@ -43,6 +43,30 @@ public class BdeGuiManager {
     private final SansCraftBDEPlugin plugin;
     private final Map<UUID, UUID> playerSelections = new HashMap<>();
     private final Map<UUID, BlockDisplay> activeBoundaries = new HashMap<>();
+    private final Map<UUID, Boolean> playerSnapMode = new HashMap<>();
+    private final Map<UUID, Integer> playerPrecision = new HashMap<>();
+
+    public boolean getSnapMode(UUID uuid) {
+        return playerSnapMode.getOrDefault(uuid, false);
+    }
+
+    public void toggleSnapMode(UUID uuid) {
+        playerSnapMode.put(uuid, !getSnapMode(uuid));
+    }
+
+    public int getPrecision(UUID uuid) {
+        return playerPrecision.getOrDefault(uuid, -1);
+    }
+
+    public void cyclePrecision(UUID uuid) {
+        int current = getPrecision(uuid);
+        int next;
+        if (current == -1) next = 1;
+        else if (current == 1) next = 2;
+        else if (current == 2) next = 3;
+        else next = -1;
+        playerPrecision.put(uuid, next);
+    }
 
     public BdeGuiManager(SansCraftBDEPlugin plugin) {
         this.plugin = plugin;
@@ -347,6 +371,19 @@ public class BdeGuiManager {
                     "§eShift-Click to disable Vehicle Mode"
             ));
 
+            inv.setItem(28, createGuiItem(Material.DIAMOND_BOOTS, "§bVehicle Traction Multiplier: §e" + String.format("%.2f", stats.getTraction()),
+                    "§7Multiplies block traction to adjust drift.",
+                    " ",
+                    "§aLeft-Click to increase by 0.05",
+                    "§cRight-Click to decrease by 0.05"
+            ));
+
+            inv.setItem(34, createGuiItem(Material.SLIME_BLOCK, "§bVehicle Traction Overrides",
+                    "§7Configure block-specific overrides for this vehicle.",
+                    " ",
+                    "§eClick to manage traction overrides."
+            ));
+
             inv.setItem(29, createGuiItem(Material.FEATHER, "§bAcceleration",
                     "§7Value: §f" + String.format("%.4f", stats.getAcceleration()),
                     " ",
@@ -407,6 +444,10 @@ public class BdeGuiManager {
 
             inv.setItem(16, createGuiItem(Material.ARMOR_STAND, "§bConfigure Seats",
                     "§7Click to configure custom seat names and icons."
+            ));
+
+            inv.setItem(22, createGuiItem(Material.TARGET, "§6Configure Subsystems & Weapons",
+                    "§7Configure operator seats, displays, weapons and projectiles."
             ));
 
             inv.setItem(17, createGuiItem(Material.COMPASS, "§bDriving Front (Yaw Offset): §e" + model.getFrontYawOffset() + "°",
@@ -891,6 +932,38 @@ public class BdeGuiManager {
                 "§7Rotation: §f" + String.format("%.1f°", yawVal)
         ));
 
+        // Preferences
+        boolean snap = getSnapMode(player.getUniqueId());
+        int precision = getPrecision(player.getUniqueId());
+        
+        inv.setItem(18, createGuiItem(
+                snap ? Material.LIME_CONCRETE : Material.RED_CONCRETE,
+                snap ? "§aSnap Mode: §lON" : "§cSnap Mode: §lOFF",
+                "§7Snaps seat yaw to nearest cardinal direction",
+                "§7(0°, 90°, 180°, 270°) when using 'Offset Seat to Here'.",
+                " ",
+                "§eClick to toggle Snap Mode"
+        ));
+        
+        String precStr = precision == -1 ? "Off" : (precision + " Decimals");
+        inv.setItem(27, createGuiItem(
+                Material.COMPARATOR,
+                "§bRounding Precision: §e" + precStr,
+                "§7Rounds seat offset coordinates when using",
+                "§7'Offset Seat to Here'.",
+                " ",
+                "§eClick to cycle precision (Off -> 1 -> 2 -> 3)"
+        ));
+
+        inv.setItem(19, createGuiItem(
+                Material.ENDER_PEARL,
+                "§aOffset Seat to Here",
+                "§7Aligns this seat to your current position",
+                "§7relative to the vehicle root.",
+                " ",
+                "§eClick to calculate and apply offset"
+        ));
+
         inv.setItem(20, createGuiItem(Material.NAME_TAG, "§bRename Seat",
                 "§7Click to rename this seat in chat."
         ));
@@ -950,5 +1023,435 @@ public class BdeGuiManager {
             return fileUri.substring(baseUri.length());
         }
         return file.getName();
+    }
+
+    public void openGeneralBlockTractionMenu(Player player) {
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.GENERAL_BLOCK_TRACTION, null, null, -1);
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Global Block Traction");
+
+        ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 54; i++) {
+            if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) {
+                inv.setItem(i, pane);
+            }
+        }
+
+        inv.setItem(49, createGuiItem(Material.SLIME_BALL, "§aRegister Block Override",
+                "§7Click this with a block item on your cursor",
+                "§7to register a new traction override for that block type!"
+        ));
+        inv.setItem(45, createGuiItem(Material.BARRIER, "§cClose Menu"));
+
+        Set<String> blockNames = new LinkedHashSet<>();
+        org.bukkit.configuration.ConfigurationSection section = plugin.getConfig().getConfigurationSection("block-traction");
+        if (section != null) {
+            blockNames.addAll(section.getKeys(false));
+        }
+        blockNames.add("BLUE_ICE");
+        blockNames.add("PACKED_ICE");
+        blockNames.add("ICE");
+        blockNames.add("SLIME_BLOCK");
+        blockNames.add("SOUL_SAND");
+
+        int slot = 9;
+        for (String key : blockNames) {
+            if (slot >= 45) break;
+            while (slot < 45 && (slot % 9 == 0 || slot % 9 == 8)) {
+                slot++;
+            }
+            if (slot >= 45) break;
+
+            Material mat = Material.matchMaterial(key);
+            if (mat == null) continue;
+
+            double val = section != null && section.contains(key) ? section.getDouble(key) : getHardcodedBlockTraction(mat);
+            inv.setItem(slot, createGuiItem(mat, "§eBlock: §f" + mat.name(),
+                    "§7Traction: §e" + val,
+                    " ",
+                    "§bLeft-Click to edit traction",
+                    "§cRight-Click to delete override"
+            ));
+            slot++;
+        }
+
+        player.openInventory(inv);
+    }
+
+    private double getHardcodedBlockTraction(Material mat) {
+        switch (mat) {
+            case BLUE_ICE: return 0.02;
+            case PACKED_ICE: return 0.05;
+            case ICE: return 0.1;
+            case SLIME_BLOCK: return 0.2;
+            case SOUL_SAND: return 0.4;
+            default: return 1.0;
+        }
+    }
+
+    public void openVehicleBlockOverridesMenu(Player player, ModelInstance instance, BdeModel model, String modelProjectId) {
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.VEHICLE_BLOCK_OVERRIDES, 
+                instance != null ? instance.getId() : null, 
+                modelProjectId);
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Vehicle Traction Overrides");
+
+        ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 54; i++) {
+            if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) {
+                inv.setItem(i, pane);
+            }
+        }
+
+        inv.setItem(49, createGuiItem(Material.SLIME_BALL, "§aRegister Block Override",
+                "§7Click this with a block item on your cursor",
+                "§7to register a new traction override for that block type!"
+        ));
+        
+        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Vehicle Config"));
+        inv.setItem(46, createGuiItem(Material.BARRIER, "§cClose Menu"));
+
+        BdeModel.VehicleStats stats = model.getVehicleStats();
+        if (stats != null && stats.getBlockOverrides() != null) {
+            int slot = 9;
+            for (Map.Entry<String, Double> entry : stats.getBlockOverrides().entrySet()) {
+                if (slot >= 45) break;
+                while (slot < 45 && (slot % 9 == 0 || slot % 9 == 8)) {
+                    slot++;
+                }
+                if (slot >= 45) break;
+
+                Material mat = Material.matchMaterial(entry.getKey());
+                if (mat == null) continue;
+
+                inv.setItem(slot, createGuiItem(mat, "§eBlock: §f" + mat.name(),
+                        "§7Traction Override: §e" + entry.getValue(),
+                        " ",
+                        "§bLeft-Click to edit override",
+                        "§cRight-Click to delete override"
+                ));
+                slot++;
+            }
+        }
+
+        player.openInventory(inv);
+    }
+
+    public void openSubsystemListMenu(Player player, ModelInstance instance, BdeModel model, String modelProjectId) {
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.SUBSYSTEM_LIST,
+                instance != null ? instance.getId() : null,
+                modelProjectId);
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Subsystems Configuration");
+
+        ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 54; i++) {
+            if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) {
+                inv.setItem(i, pane);
+            }
+        }
+
+        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Vehicle Config"));
+        inv.setItem(46, createGuiItem(Material.ANVIL, "§aAdd New Subsystem", "§7Click to mount a new weapon subsystem."));
+        inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
+
+        BdeModel.VehicleConfig cfg = model.getVehicle();
+        if (cfg != null && cfg.getSubsystems() != null) {
+            List<Integer> slots = java.util.Arrays.asList(
+                11, 12, 13, 14, 15, 16,
+                19, 20, 21, 22, 23, 24, 25,
+                28, 29, 30, 31, 32, 33, 34,
+                37, 38, 39, 40, 41, 42, 43
+            );
+            for (int i = 0; i < cfg.getSubsystems().size(); i++) {
+                if (i >= slots.size()) break;
+                BdeModel.SubsystemConfig sub = cfg.getSubsystems().get(i);
+                inv.setItem(slots.get(i), createGuiItem(Material.TARGET, "§eSubsystem: §l" + sub.getName(),
+                        "§7Operator Seat Index: §f" + (sub.getControllerSeatIndex() == -1 ? "Driver" : "Passenger " + (sub.getControllerSeatIndex() + 1)),
+                        "§7Display Tag: §f" + sub.getDisplayTag(),
+                        "§7Weapon Modes Count: §f" + (sub.getWeaponModes() != null ? sub.getWeaponModes().size() : 0),
+                        " ",
+                        "§bLeft-Click to edit details",
+                        "§cRight-Click to delete subsystem"
+                ));
+            }
+        }
+
+        player.openInventory(inv);
+    }
+
+    public void openSubsystemDetailMenu(Player player, ModelInstance instance, BdeModel model, String modelProjectId, int subsystemIndex) {
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.SUBSYSTEM_DETAIL,
+                instance != null ? instance.getId() : null,
+                modelProjectId, null, subsystemIndex, null);
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Subsystem Details");
+
+        ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 54; i++) {
+            if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) {
+                inv.setItem(i, pane);
+            }
+        }
+
+        BdeModel.VehicleConfig cfg = model.getVehicle();
+        if (cfg != null && subsystemIndex >= 0 && subsystemIndex < cfg.getSubsystems().size()) {
+            BdeModel.SubsystemConfig sub = cfg.getSubsystems().get(subsystemIndex);
+            
+            inv.setItem(13, createGuiItem(Material.NAME_TAG, "§eSubsystem Name: §l" + sub.getName(),
+                    "§7Current name of the subsystem.",
+                    " ",
+                    "§eLeft-Click to change name."
+            ));
+
+            inv.setItem(14, createGuiItem(Material.SADDLE, "§eOperator Seat Index: §f" + sub.getControllerSeatIndex(),
+                    "§7Seat index that controls this subsystem.",
+                    "§7-1 = Driver, 0+ = Passenger Seats.",
+                    " ",
+                    "§eLeft-Click to cycle seat index."
+            ));
+
+            inv.setItem(15, createGuiItem(Material.PAPER, "§eDisplay Tag: §f" + sub.getDisplayTag(),
+                    "§7Scoreboard tag of model's display parts",
+                    "§7representing this subsystem.",
+                    " ",
+                    "§eLeft-Click to change display tag."
+            ));
+
+            inv.setItem(22, createGuiItem(Material.BOW, "§6Weapon Modes (Projectiles)",
+                    "§7Configure weapon modes and projectile settings.",
+                    " ",
+                    "§eClick to open weapon mode editor."
+            ));
+
+            inv.setItem(28, createGuiItem(Material.GOLDEN_HORSE_ARMOR, "§eMounted BDE Model ID",
+                    "§7Model ID of BDE model to mount as subsystem.",
+                    "§7Current: §f" + (sub.getBdeModelId() != null ? sub.getBdeModelId() : "None"),
+                    " ",
+                    "§eClick to change subsystem Model ID."
+            ));
+
+            List<Double> mountOffset = sub.getMountOffset();
+            if (mountOffset == null) mountOffset = Arrays.asList(0.0, 0.0, 0.0);
+            List<Double> finalMountOffset = new ArrayList<>(mountOffset);
+            while (finalMountOffset.size() < 3) finalMountOffset.add(0.0);
+
+            inv.setItem(29, createGuiItem(Material.DISPENSER, "§eMounting Point Offset",
+                    "§7Location where the subsystem model is placed.",
+                    "§7Current: §f" + String.format("%.2f, %.2f, %.2f", finalMountOffset.get(0), finalMountOffset.get(1), finalMountOffset.get(2)),
+                    " ",
+                    "§eLeft-Click to snap to your current position",
+                    "§eRight-Click to type custom coordinates"
+            ));
+
+            List<Double> launchOffset = sub.getLaunchOffset();
+            if (launchOffset == null) launchOffset = Arrays.asList(0.0, 0.0, 0.0);
+            List<Double> finalLaunchOffset = new ArrayList<>(launchOffset);
+            while (finalLaunchOffset.size() < 3) finalLaunchOffset.add(0.0);
+
+            inv.setItem(30, createGuiItem(Material.FIREWORK_ROCKET, "§eLaunching Point Offset",
+                    "§7Muzzle offset from subsystem model origin.",
+                    "§7Current: §f" + String.format("%.2f, %.2f, %.2f", finalLaunchOffset.get(0), finalLaunchOffset.get(1), finalLaunchOffset.get(2)),
+                    " ",
+                    "§eLeft-Click to snap to your current position",
+                    "§eRight-Click to type custom coordinates"
+            ));
+
+            inv.setItem(31, createGuiItem(Material.COMPASS, "§eFOV Yaw Clamps",
+                    "§7Min: §f" + (sub.getFovMinYaw() != null ? sub.getFovMinYaw() + "°" : "Unlimited"),
+                    "§7Max: §f" + (sub.getFovMaxYaw() != null ? sub.getFovMaxYaw() + "°" : "Unlimited"),
+                    " ",
+                    "§eLeft-Click to edit Min Yaw limit",
+                    "§eRight-Click to edit Max Yaw limit"
+            ));
+
+            inv.setItem(32, createGuiItem(Material.SPYGLASS, "§eFOV Pitch Clamps",
+                    "§7Min: §f" + (sub.getFovMinPitch() != null ? sub.getFovMinPitch() + "°" : "Unlimited"),
+                    "§7Max: §f" + (sub.getFovMaxPitch() != null ? sub.getFovMaxPitch() + "°" : "Unlimited"),
+                    " ",
+                    "§eLeft-Click to edit Min Pitch limit",
+                    "§eRight-Click to edit Max Pitch limit"
+            ));
+
+            List<Double> cameraOffset = sub.getCameraOffset();
+            if (cameraOffset == null) cameraOffset = Arrays.asList(0.0, 0.0, 0.0);
+            List<Double> finalCameraOffset = new ArrayList<>(cameraOffset);
+            while (finalCameraOffset.size() < 3) finalCameraOffset.add(0.0);
+
+            inv.setItem(33, createGuiItem(Material.ENDER_EYE, "§eWeapon-Cam Camera Offset",
+                    "§7First-person spectator seat offset relative to subsystem.",
+                    "§7Current: §f" + String.format("%.2f, %.2f, %.2f", finalCameraOffset.get(0), finalCameraOffset.get(1), finalCameraOffset.get(2)),
+                    " ",
+                    "§eLeft-Click to snap to your current position",
+                    "§eRight-Click to type custom coordinates"
+            ));
+            List<Double> pivotOffset = sub.getPivotOffset();
+            if (pivotOffset == null) pivotOffset = Arrays.asList(0.0, 0.0, 0.0);
+            List<Double> finalPivotOffset = new ArrayList<>(pivotOffset);
+            while (finalPivotOffset.size() < 3) finalPivotOffset.add(0.0);
+
+            inv.setItem(34, createGuiItem(Material.PISTON, "§ePivot Point Offset (Rotation Center)",
+                    "§7Displacement from subsystem origin representing rotation center.",
+                    "§7Current: §f" + String.format("%.2f, %.2f, %.2f", finalPivotOffset.get(0), finalPivotOffset.get(1), finalPivotOffset.get(2)),
+                    " ",
+                    "§eLeft-Click to snap to your current position",
+                    "§eRight-Click to type custom coordinates"
+            ));
+            inv.setItem(16, createGuiItem(Material.ARMOR_STAND, "§a§lInteractive Placement Mode",
+                    "§7Enter interactive visual editor to place",
+                    "§7this subsystem in the world using your crosshair.",
+                    " ",
+                    "§eClick to enter placement mode."
+            ));
+        }
+
+        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Subsystem List"));
+        inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
+
+        player.openInventory(inv);
+    }
+
+    public void openWeaponModeListMenu(Player player, ModelInstance instance, BdeModel model, String modelProjectId, int subsystemIndex) {
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.WEAPON_MODE_LIST,
+                instance != null ? instance.getId() : null,
+                modelProjectId, null, subsystemIndex, null);
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Weapon Modes Configuration");
+
+        ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 54; i++) {
+            if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) {
+                inv.setItem(i, pane);
+            }
+        }
+
+        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Subsystem Details"));
+        inv.setItem(46, createGuiItem(Material.GUNPOWDER, "§aAdd New Weapon Mode", "§7Click to add a new weapon firing mode."));
+        inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
+
+        BdeModel.VehicleConfig cfg = model.getVehicle();
+        if (cfg != null && subsystemIndex >= 0 && subsystemIndex < cfg.getSubsystems().size()) {
+            BdeModel.SubsystemConfig sub = cfg.getSubsystems().get(subsystemIndex);
+            List<Integer> slots = java.util.Arrays.asList(
+                11, 12, 13, 14, 15, 16,
+                19, 20, 21, 22, 23, 24, 25,
+                28, 29, 30, 31, 32, 33, 34,
+                37, 38, 39, 40, 41, 42, 43
+            );
+            if (sub.getWeaponModes() != null) {
+                for (int i = 0; i < sub.getWeaponModes().size(); i++) {
+                    if (i >= slots.size()) break;
+                    BdeModel.ProjectileConfig proj = sub.getWeaponModes().get(i);
+                    inv.setItem(slots.get(i), createGuiItem(Material.FIREWORK_ROCKET, "§eWeapon Mode: §l" + proj.getName(),
+                            "§7Damage: §f" + proj.getDamage(),
+                            "§7Speed: §f" + proj.getSpeed(),
+                            "§7Cooldown: §f" + proj.getCooldown() + "s",
+                            "§7Lock-on: §f" + (proj.isLockOn() ? "Enabled" : "Disabled"),
+                            " ",
+                            "§bLeft-Click to edit weapon details",
+                            "§cRight-Click to delete weapon mode"
+                    ));
+                }
+            }
+        }
+
+        player.openInventory(inv);
+    }
+
+    public void openWeaponModeDetailMenu(Player player, ModelInstance instance, BdeModel model, String modelProjectId, int subsystemIndex, int weaponModeIndex) {
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.WEAPON_MODE_DETAIL,
+                instance != null ? instance.getId() : null,
+                modelProjectId, null, subsystemIndex, weaponModeIndex);
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Weapon Mode Details");
+
+        ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 54; i++) {
+            if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) {
+                inv.setItem(i, pane);
+            }
+        }
+
+        BdeModel.VehicleConfig cfg = model.getVehicle();
+        if (cfg != null && subsystemIndex >= 0 && subsystemIndex < cfg.getSubsystems().size()) {
+            BdeModel.SubsystemConfig sub = cfg.getSubsystems().get(subsystemIndex);
+            if (sub.getWeaponModes() != null && weaponModeIndex >= 0 && weaponModeIndex < sub.getWeaponModes().size()) {
+                BdeModel.ProjectileConfig proj = sub.getWeaponModes().get(weaponModeIndex);
+
+                inv.setItem(10, createGuiItem(Material.NAME_TAG, "§eWeapon Name: §l" + proj.getName(),
+                        "§7Click to edit name."
+                ));
+
+                inv.setItem(11, createGuiItem(Material.IRON_SWORD, "§eDamage: §f" + proj.getDamage(),
+                        "§aLeft-Click to increase by 1",
+                        "§cRight-Click to decrease by 1"
+                ));
+
+                inv.setItem(12, createGuiItem(Material.FEATHER, "§eSpeed: §f" + proj.getSpeed(),
+                        "§aLeft-Click to increase by 0.1",
+                        "§cRight-Click to decrease by 0.1"
+                ));
+
+                inv.setItem(13, createGuiItem(Material.CLOCK, "§eCooldown: §f" + proj.getCooldown() + "s",
+                        "§aLeft-Click to increase by 0.1s",
+                        "§cRight-Click to decrease by 0.1s"
+                ));
+
+                inv.setItem(14, createGuiItem(Material.ANVIL, "§eGravity: §f" + (proj.isHasGravity() ? "Enabled" : "Disabled"),
+                        "§eClick to toggle gravity status."
+                ));
+
+                inv.setItem(15, createGuiItem(Material.TNT, "§eOn Hit Behavior: §f" + proj.getOnHit().toUpperCase(),
+                        "§eClick to toggle (despawn / explode / laser)."
+                ));
+
+                inv.setItem(16, createGuiItem(Material.FIREWORK_STAR, "§eExplosion Power: §f" + proj.getExplosionPower(),
+                        "§aLeft-Click to increase by 0.5",
+                        "§cRight-Click to decrease by 0.5"
+                ));
+
+                inv.setItem(19, createGuiItem(Material.TNT_MINECART, "§eDestroy Blocks: §f" + (proj.isDestroyBlocks() ? "Yes" : "No"),
+                        "§eClick to toggle block destruction."
+                ));
+
+                inv.setItem(20, createGuiItem(Material.CREEPER_HEAD, "§eVanilla Explosion Damage: §f" + (proj.isVanillaExplosionDamage() ? "Yes" : "No"),
+                        "§eClick to toggle vanilla explosion damage."
+                ));
+
+                inv.setItem(21, createGuiItem(Material.TARGET, "§eLock-On Homing: §f" + (proj.isLockOn() ? "Enabled" : "Disabled"),
+                        "§eClick to toggle target homing lock."
+                ));
+
+                inv.setItem(22, createGuiItem(Material.SPYGLASS, "§eLock Range: §f" + proj.getLockRange(),
+                        "§aLeft-Click to increase by 5",
+                        "§cRight-Click to decrease by 5"
+                ));
+
+                inv.setItem(23, createGuiItem(Material.COMPASS, "§eLock Angle: §f" + proj.getLockAngle() + "°",
+                        "§aLeft-Click to increase by 5°",
+                        "§cRight-Click to decrease by 5°"
+                ));
+
+                inv.setItem(24, createGuiItem(Material.RECOVERY_COMPASS, "§eLock Time: §f" + proj.getLockTime() + "s",
+                        "§aLeft-Click to increase by 0.5s",
+                        "§cRight-Click to decrease by 0.5s"
+                ));
+
+                inv.setItem(28, createGuiItem(Material.ARMOR_STAND, "§eBDE Projectile Model ID: §f" + (proj.getBdeModelId() != null ? proj.getBdeModelId() : "None"),
+                        "§7Click to edit model ID."
+                ));
+
+                inv.setItem(29, createGuiItem(Material.JUKEBOX, "§eLaunch Sound: §f" + proj.getLaunchSound(),
+                        "§7Click to edit launch sound."
+                ));
+
+                inv.setItem(30, createGuiItem(Material.BLAZE_POWDER, "§eFly Particle: §f" + proj.getFlyParticle(),
+                        "§7Click to edit flight particle."
+                ));
+
+                inv.setItem(31, createGuiItem(Material.GUNPOWDER, "§eImpact Particle: §f" + proj.getImpactParticle(),
+                        "§7Click to edit impact particle."
+                ));
+            }
+        }
+
+        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Weapon Mode List"));
+        inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
+
+        player.openInventory(inv);
     }
 }
