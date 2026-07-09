@@ -189,6 +189,12 @@ api-endpoint: "https://block-display.com/server-api/"
 # How long to cache downloaded models locally in minutes (1440 = 24 hours)
 cache-duration-minutes: 1440
 
+# Whether to delete all spawned models when the server shuts down.
+# If false, the models will persist across restarts, but they will become
+# unselectable, non-functional, and non-deletable via the BDE plugin.
+# You will need another plugin (i.e. EasyArmorStands) to select and delete models.
+cleanup-models-on-shutdown: true
+
 # Voxel conversion defaults
 voxels:
   # Default block to use if a color index cannot be mapped
