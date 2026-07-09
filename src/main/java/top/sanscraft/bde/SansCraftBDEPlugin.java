@@ -59,8 +59,13 @@ public class SansCraftBDEPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         // Despawn all active model instances to prevent orphan entities
-        if (modelManager != null) {
+        boolean cleanupModels = getConfig().getBoolean("cleanup-models-on-shutdown", true);
+
+        if (cleanupModels && modelManager != null) {
             modelManager.cleanupAll();
+            getLogger().info("Cleaned up all spawned BDE models.");
+        } else {
+            getLogger().info("Skipping BDE model cleanup. Models will persist as orphaned entities.");
         }
         if (customBlockManager != null) {
             customBlockManager.despawnAllLoadedBlocks();
