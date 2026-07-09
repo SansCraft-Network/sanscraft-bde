@@ -1,9 +1,11 @@
 package top.sanscraft.bde.model;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import top.sanscraft.bde.manager.ModelManager;
 
 public class BdeModel {
     private String version;
@@ -35,12 +37,6 @@ public class BdeModel {
         this.isVehicleLibrary = isVehicleLibrary;
     }
 
-    // Keep old fields to support legacy loading
-    private List<Double> seat_offset;
-    private Double front_yaw_offset;
-    private List<List<Double>> passenger_offsets;
-    private VehicleStats vehicle_stats;
-
     public String getVersion() {
         return version;
     }
@@ -58,11 +54,9 @@ public class BdeModel {
     }
 
     public void setType(String type) {
-        VehicleConfig cfg = getVehicle();
-        if (cfg != null) {
-            cfg.setType(type);
-        } else {
-            this.type = type;
+        this.type = type;
+        if (vehicle != null) {
+            vehicle.setType(type);
         }
     }
 
@@ -134,67 +128,24 @@ public class BdeModel {
     }
 
     public VehicleConfig getVehicle() {
-        if (vehicle == null) {
-            if (seat_offset != null || front_yaw_offset != null || passenger_offsets != null || vehicle_stats != null || "vehicle".equalsIgnoreCase(type)) {
-                vehicle = new VehicleConfig();
-                vehicle.setSeatOffset(seat_offset);
-                vehicle.setFrontYawOffset(front_yaw_offset);
-                vehicle.setStats(vehicle_stats);
-                if (type != null) {
-                    vehicle.setType(type);
-                }
-                
-                List<PassengerSeatConfig> seats = new ArrayList<>();
-                if (passenger_offsets != null) {
-                    for (int i = 0; i < passenger_offsets.size(); i++) {
-                        PassengerSeatConfig seatCfg = new PassengerSeatConfig();
-                        seatCfg.setOffset(passenger_offsets.get(i));
-                        seatCfg.setName("Passenger Seat " + (i + 1));
-                        seatCfg.setIcon("MINECART");
-                        seats.add(seatCfg);
-                    }
-                }
-                vehicle.setPassengerSeats(seats);
-            }
-        }
         return vehicle;
     }
 
     public void ensureVehicleConfig() {
         if (vehicle == null) {
             vehicle = new VehicleConfig();
-            if (seat_offset != null) vehicle.setSeatOffset(seat_offset);
-            if (front_yaw_offset != null) vehicle.setFrontYawOffset(front_yaw_offset);
-            if (vehicle_stats != null) vehicle.setStats(vehicle_stats);
-            if (type != null) vehicle.setType(type);
-            
-            List<PassengerSeatConfig> seats = new ArrayList<>();
-            if (passenger_offsets != null) {
-                for (int i = 0; i < passenger_offsets.size(); i++) {
-                    PassengerSeatConfig seatCfg = new PassengerSeatConfig();
-                    seatCfg.setOffset(passenger_offsets.get(i));
-                    seatCfg.setName("Passenger Seat " + (i + 1));
-                    seatCfg.setIcon("MINECART");
-                    seats.add(seatCfg);
-                }
-            }
-            vehicle.setPassengerSeats(seats);
+            vehicle.setType(type);
         }
     }
 
     public void prepareForSave() {
         if (vehicle != null) {
-            seat_offset = null;
-            front_yaw_offset = null;
-            passenger_offsets = null;
-            vehicle_stats = null;
             type = vehicle.getType();
         }
     }
 
     public List<Double> getSeatOffset() {
-        VehicleConfig cfg = getVehicle();
-        return cfg != null ? cfg.getSeatOffset() : seat_offset;
+        return vehicle != null ? vehicle.getSeatOffset() : null;
     }
 
     public void setSeatOffset(List<Double> seatOffset) {
@@ -203,8 +154,7 @@ public class BdeModel {
     }
 
     public Double getFrontYawOffset() {
-        VehicleConfig cfg = getVehicle();
-        return cfg != null ? cfg.getFrontYawOffset() : (front_yaw_offset != null ? front_yaw_offset : 0.0);
+        return vehicle != null ? vehicle.getFrontYawOffset() : 0.0;
     }
 
     public void setFrontYawOffset(Double frontYawOffset) {
@@ -213,15 +163,14 @@ public class BdeModel {
     }
 
     public List<List<Double>> getPassengerOffsets() {
-        VehicleConfig cfg = getVehicle();
-        if (cfg != null) {
+        if (vehicle != null) {
             List<List<Double>> list = new ArrayList<>();
-            for (PassengerSeatConfig seat : cfg.getPassengerSeats()) {
+            for (PassengerSeatConfig seat : vehicle.getPassengerSeats()) {
                 list.add(seat.getOffset());
             }
             return list;
         }
-        return passenger_offsets != null ? passenger_offsets : new ArrayList<>();
+        return new ArrayList<>();
     }
 
     public void setPassengerOffsets(List<List<Double>> passengerOffsets) {
@@ -240,8 +189,7 @@ public class BdeModel {
     }
 
     public VehicleStats getVehicleStats() {
-        VehicleConfig cfg = getVehicle();
-        return cfg != null ? cfg.getStats() : vehicle_stats;
+        return vehicle != null ? vehicle.getStats() : null;
     }
 
     public void setVehicleStats(VehicleStats vehicleStats) {
@@ -507,59 +455,124 @@ public class BdeModel {
 
     public static class SubsystemConfig {
         private String name = "Subsystem";
+        private String turretId;
         private int controllerSeatIndex = -1; // -1 for driver, 0+ for passenger seats
-        private String displayTag; // Scoreboard tag of the display entity representing the weapon
-        private List<ProjectileConfig> weaponModes = new ArrayList<>();
-        private String bdeModelId;
-        private List<Double> mountOffset;
-        private List<Double> launchOffset;
-        private Double fovMinYaw;
-        private Double fovMaxYaw;
-        private Double fovMinPitch;
-        private Double fovMaxPitch;
-        private List<Double> cameraOffset;
-        private List<Double> pivotOffset;
+        private List<Double> mountOffset = new ArrayList<>();
+        private List<String> projectileOverrides;
 
         public String getName() { return name != null ? name : "Subsystem"; }
         public void setName(String name) { this.name = name; }
+        public String getTurretId() { return turretId; }
+        public void setTurretId(String turretId) { this.turretId = turretId; }
         public int getControllerSeatIndex() { return controllerSeatIndex; }
         public void setControllerSeatIndex(int controllerSeatIndex) { this.controllerSeatIndex = controllerSeatIndex; }
-        public String getDisplayTag() { return displayTag; }
-        public void setDisplayTag(String displayTag) { this.displayTag = displayTag; }
-        public List<ProjectileConfig> getWeaponModes() {
-            if (weaponModes == null) {
-                weaponModes = new ArrayList<>();
+        public List<Double> getMountOffset() {
+            if (mountOffset == null) {
+                mountOffset = new ArrayList<>();
             }
-            return weaponModes;
+            return mountOffset;
         }
-        public void setWeaponModes(List<ProjectileConfig> weaponModes) { this.weaponModes = weaponModes; }
-
-        public String getBdeModelId() { return bdeModelId; }
-        public void setBdeModelId(String bdeModelId) { this.bdeModelId = bdeModelId; }
-
-        public List<Double> getMountOffset() { return mountOffset; }
         public void setMountOffset(List<Double> mountOffset) { this.mountOffset = mountOffset; }
 
-        public List<Double> getLaunchOffset() { return launchOffset; }
-        public void setLaunchOffset(List<Double> launchOffset) { this.launchOffset = launchOffset; }
+        public List<String> getProjectileOverrides() {
+            return projectileOverrides;
+        }
 
-        public Double getFovMinYaw() { return fovMinYaw; }
-        public void setFovMinYaw(Double fovMinYaw) { this.fovMinYaw = fovMinYaw; }
+        public void setProjectileOverrides(List<String> projectileOverrides) {
+            this.projectileOverrides = projectileOverrides;
+        }
 
-        public Double getFovMaxYaw() { return fovMaxYaw; }
-        public void setFovMaxYaw(Double fovMaxYaw) { this.fovMaxYaw = fovMaxYaw; }
+        public String getBdeModelId(ModelManager mm) {
+            if (turretId != null && !turretId.isEmpty() && mm != null) {
+                TurretConfig tc = mm.getTurretTemplate(turretId);
+                if (tc != null) return tc.getBdeModelId();
+            }
+            return null;
+        }
 
-        public Double getFovMinPitch() { return fovMinPitch; }
-        public void setFovMinPitch(Double fovMinPitch) { this.fovMinPitch = fovMinPitch; }
+        public String getDisplayTag(ModelManager mm) {
+            if (turretId != null && !turretId.isEmpty() && mm != null) {
+                TurretConfig tc = mm.getTurretTemplate(turretId);
+                if (tc != null) return tc.getDisplayTag();
+            }
+            return null;
+        }
 
-        public Double getFovMaxPitch() { return fovMaxPitch; }
-        public void setFovMaxPitch(Double fovMaxPitch) { this.fovMaxPitch = fovMaxPitch; }
+        public List<Double> getLaunchOffset(ModelManager mm) {
+            if (turretId != null && !turretId.isEmpty() && mm != null) {
+                TurretConfig tc = mm.getTurretTemplate(turretId);
+                if (tc != null) return tc.getLaunchOffset();
+            }
+            return new ArrayList<>();
+        }
 
-        public List<Double> getCameraOffset() { return cameraOffset; }
-        public void setCameraOffset(List<Double> cameraOffset) { this.cameraOffset = cameraOffset; }
+        public List<Double> getPivotOffset(ModelManager mm) {
+            if (turretId != null && !turretId.isEmpty() && mm != null) {
+                TurretConfig tc = mm.getTurretTemplate(turretId);
+                if (tc != null) return tc.getPivotOffset();
+            }
+            return new ArrayList<>();
+        }
 
-        public List<Double> getPivotOffset() { return pivotOffset; }
-        public void setPivotOffset(List<Double> pivotOffset) { this.pivotOffset = pivotOffset; }
+        public List<Double> getCameraOffset(ModelManager mm) {
+            if (turretId != null && !turretId.isEmpty() && mm != null) {
+                TurretConfig tc = mm.getTurretTemplate(turretId);
+                if (tc != null) return tc.getCameraOffset();
+            }
+            return new ArrayList<>();
+        }
+
+        public Double getFovMinYaw(ModelManager mm) {
+            if (turretId != null && !turretId.isEmpty() && mm != null) {
+                TurretConfig tc = mm.getTurretTemplate(turretId);
+                if (tc != null) return tc.getFovMinYaw();
+            }
+            return null;
+        }
+
+        public Double getFovMaxYaw(ModelManager mm) {
+            if (turretId != null && !turretId.isEmpty() && mm != null) {
+                TurretConfig tc = mm.getTurretTemplate(turretId);
+                if (tc != null) return tc.getFovMaxYaw();
+            }
+            return null;
+        }
+
+        public Double getFovMinPitch(ModelManager mm) {
+            if (turretId != null && !turretId.isEmpty() && mm != null) {
+                TurretConfig tc = mm.getTurretTemplate(turretId);
+                if (tc != null) return tc.getFovMinPitch();
+            }
+            return null;
+        }
+
+        public Double getFovMaxPitch(ModelManager mm) {
+            if (turretId != null && !turretId.isEmpty() && mm != null) {
+                TurretConfig tc = mm.getTurretTemplate(turretId);
+                if (tc != null) return tc.getFovMaxPitch();
+            }
+            return null;
+        }
+
+        public List<ProjectileConfig> getWeaponModes(ModelManager mm) {
+            List<String> projIds = null;
+            if (projectileOverrides != null && !projectileOverrides.isEmpty()) {
+                projIds = projectileOverrides;
+            } else if (turretId != null && !turretId.isEmpty() && mm != null) {
+                TurretConfig tc = mm.getTurretTemplate(turretId);
+                if (tc != null) projIds = tc.getProjectileIds();
+            }
+            List<ProjectileConfig> resolved = new ArrayList<>();
+            if (projIds != null && mm != null) {
+                for (String id : projIds) {
+                    ProjectileConfig pc = mm.getProjectileConfig(id);
+                    if (pc != null) {
+                        resolved.add(pc);
+                    }
+                }
+            }
+            return resolved;
+        }
     }
 
     public static class ProjectileConfig {
@@ -587,6 +600,10 @@ public class BdeModel {
         private double lockRange = 50.0;
         private double lockAngle = 30.0;
         private double lockTime = 2.0;
+
+        // Base point & direction vector for BDE model rendering alignment
+        private List<Double> basePoint = new ArrayList<>(Arrays.asList(0.0, 0.0, 0.0));
+        private List<Double> directionVector = new ArrayList<>(Arrays.asList(0.0, 0.0, 1.0));
 
         public String getName() { return name != null ? name : "Projectile"; }
         public void setName(String name) { this.name = name; }
@@ -630,5 +647,21 @@ public class BdeModel {
         public void setLockAngle(double lockAngle) { this.lockAngle = lockAngle; }
         public double getLockTime() { return lockTime; }
         public void setLockTime(double lockTime) { this.lockTime = lockTime; }
+
+        public List<Double> getBasePoint() {
+            if (basePoint == null) {
+                basePoint = new ArrayList<>(Arrays.asList(0.0, 0.0, 0.0));
+            }
+            return basePoint;
+        }
+        public void setBasePoint(List<Double> basePoint) { this.basePoint = basePoint; }
+
+        public List<Double> getDirectionVector() {
+            if (directionVector == null) {
+                directionVector = new ArrayList<>(Arrays.asList(0.0, 0.0, 1.0));
+            }
+            return directionVector;
+        }
+        public void setDirectionVector(List<Double> directionVector) { this.directionVector = directionVector; }
     }
 }

@@ -19,6 +19,7 @@ import top.sanscraft.bde.SansCraftBDEPlugin;
 import top.sanscraft.bde.gui.BdeGuiHolder;
 import top.sanscraft.bde.model.BdeModel;
 import top.sanscraft.bde.model.ModelInstance;
+import top.sanscraft.bde.model.TurretConfig;
 
 import java.io.File;
 import java.util.*;
@@ -1209,8 +1210,8 @@ public class BdeGuiManager {
                 BdeModel.SubsystemConfig sub = cfg.getSubsystems().get(i);
                 inv.setItem(slots.get(i), createGuiItem(Material.TARGET, "§eSubsystem: §l" + sub.getName(),
                         "§7Operator Seat Index: §f" + (sub.getControllerSeatIndex() == -1 ? "Driver" : "Passenger " + (sub.getControllerSeatIndex() + 1)),
-                        "§7Display Tag: §f" + sub.getDisplayTag(),
-                        "§7Weapon Modes Count: §f" + (sub.getWeaponModes() != null ? sub.getWeaponModes().size() : 0),
+                        "§7Display Tag: §f" + sub.getDisplayTag(plugin.getModelManager()),
+                        "§7Weapon Modes Count: §f" + (sub.getWeaponModes(plugin.getModelManager()) != null ? sub.getWeaponModes(plugin.getModelManager()).size() : 0),
                         " ",
                         "§bLeft-Click to edit details",
                         "§cRight-Click to delete subsystem"
@@ -1237,9 +1238,10 @@ public class BdeGuiManager {
         BdeModel.VehicleConfig cfg = model.getVehicle();
         if (cfg != null && subsystemIndex >= 0 && subsystemIndex < cfg.getSubsystems().size()) {
             BdeModel.SubsystemConfig sub = cfg.getSubsystems().get(subsystemIndex);
+            ModelManager mm = plugin.getModelManager();
             
             inv.setItem(13, createGuiItem(Material.NAME_TAG, "§eSubsystem Name: §l" + sub.getName(),
-                    "§7Current name of the subsystem.",
+                    "§7Current name of the subsystem mounting slot.",
                     " ",
                     "§eLeft-Click to change name."
             ));
@@ -1251,97 +1253,174 @@ public class BdeGuiManager {
                     "§eLeft-Click to cycle seat index."
             ));
 
-            inv.setItem(15, createGuiItem(Material.PAPER, "§eDisplay Tag: §f" + sub.getDisplayTag(),
-                    "§7Scoreboard tag of model's display parts",
-                    "§7representing this subsystem.",
+            // Slot 27: Link Turret Template
+            String turretId = sub.getTurretId();
+            if (turretId != null && !turretId.isEmpty()) {
+                inv.setItem(27, createGuiItem(Material.CROSSBOW, "§eLinked Turret Template: §b§l" + turretId,
+                        "§7Subsystem is configured by this turret template.",
+                        " ",
+                        "§eLeft-Click to change linked template.",
+                        "§cRight-Click to unlink template."
+                ));
+            } else {
+                inv.setItem(27, createGuiItem(Material.CROSSBOW, "§cNo Turret Template Linked",
+                        "§7Subsystem will not mount a weapon or model",
+                        "§7until a turret template is linked.",
+                        " ",
+                        "§eLeft-Click to link a turret template."
+                ));
+            }
+
+            // Slot 26: Export Subsystem as Turret Template
+            inv.setItem(26, createGuiItem(Material.WRITABLE_BOOK, "§6Export Subsystem as Turret Template",
+                    "§7Export subsystem settings to a reusable",
+                    "§7turret configuration template.",
                     " ",
-                    "§eLeft-Click to change display tag."
+                    "§eClick to export."
             ));
 
-            inv.setItem(22, createGuiItem(Material.BOW, "§6Weapon Modes (Projectiles)",
-                    "§7Configure weapon modes and projectile settings.",
-                    " ",
-                    "§eClick to open weapon mode editor."
-            ));
-
+            // Slot 28: Mounted BDE Model ID (Read-only, inherited)
+            String subModelId = sub.getBdeModelId(mm);
             inv.setItem(28, createGuiItem(Material.GOLDEN_HORSE_ARMOR, "§eMounted BDE Model ID",
-                    "§7Model ID of BDE model to mount as subsystem.",
-                    "§7Current: §f" + (sub.getBdeModelId() != null ? sub.getBdeModelId() : "None"),
+                    "§7Model ID of BDE model defined in the linked turret.",
+                    "§7Current (Inherited): §f" + (subModelId != null ? subModelId : "None"),
                     " ",
-                    "§eClick to change subsystem Model ID."
+                    "§cRead-only (Defined on Turret template)"
             ));
 
+            // Slot 29: Mounting Point Offset (Vehicle-specific, editable)
             List<Double> mountOffset = sub.getMountOffset();
             if (mountOffset == null) mountOffset = Arrays.asList(0.0, 0.0, 0.0);
             List<Double> finalMountOffset = new ArrayList<>(mountOffset);
             while (finalMountOffset.size() < 3) finalMountOffset.add(0.0);
 
             inv.setItem(29, createGuiItem(Material.DISPENSER, "§eMounting Point Offset",
-                    "§7Location where the subsystem model is placed.",
-                    "§7Current: §f" + String.format("%.2f, %.2f, %.2f", finalMountOffset.get(0), finalMountOffset.get(1), finalMountOffset.get(2)),
+                    "§7Chassis mounting coordinates relative to driver's seat.",
+                    "§7Current (Vehicle): §f" + String.format("%.2f, %.2f, %.2f", finalMountOffset.get(0), finalMountOffset.get(1), finalMountOffset.get(2)),
                     " ",
-                    "§eLeft-Click to snap to your current position",
+                    "§eLeft-Click to enter interactive placement mode",
                     "§eRight-Click to type custom coordinates"
             ));
 
-            List<Double> launchOffset = sub.getLaunchOffset();
+            // Slot 30: Launching Point Offset (Read-only, inherited)
+            List<Double> launchOffset = sub.getLaunchOffset(mm);
             if (launchOffset == null) launchOffset = Arrays.asList(0.0, 0.0, 0.0);
             List<Double> finalLaunchOffset = new ArrayList<>(launchOffset);
             while (finalLaunchOffset.size() < 3) finalLaunchOffset.add(0.0);
 
             inv.setItem(30, createGuiItem(Material.FIREWORK_ROCKET, "§eLaunching Point Offset",
                     "§7Muzzle offset from subsystem model origin.",
-                    "§7Current: §f" + String.format("%.2f, %.2f, %.2f", finalLaunchOffset.get(0), finalLaunchOffset.get(1), finalLaunchOffset.get(2)),
+                    "§7Current (Inherited): §f" + String.format("%.2f, %.2f, %.2f", finalLaunchOffset.get(0), finalLaunchOffset.get(1), finalLaunchOffset.get(2)),
                     " ",
-                    "§eLeft-Click to snap to your current position",
-                    "§eRight-Click to type custom coordinates"
+                    "§cRead-only (Defined on Turret template)"
             ));
 
+            // Slot 31: FOV Yaw Clamps (Read-only, inherited)
+            Double minYaw = sub.getFovMinYaw(mm);
+            Double maxYaw = sub.getFovMaxYaw(mm);
             inv.setItem(31, createGuiItem(Material.COMPASS, "§eFOV Yaw Clamps",
-                    "§7Min: §f" + (sub.getFovMinYaw() != null ? sub.getFovMinYaw() + "°" : "Unlimited"),
-                    "§7Max: §f" + (sub.getFovMaxYaw() != null ? sub.getFovMaxYaw() + "°" : "Unlimited"),
+                    "§7Min (Inherited): §f" + (minYaw != null ? minYaw + "°" : "Unlimited"),
+                    "§7Max (Inherited): §f" + (maxYaw != null ? maxYaw + "°" : "Unlimited"),
                     " ",
-                    "§eLeft-Click to edit Min Yaw limit",
-                    "§eRight-Click to edit Max Yaw limit"
+                    "§cRead-only (Defined on Turret template)"
             ));
 
+            // Slot 32: FOV Pitch Clamps (Read-only, inherited)
+            Double minPitch = sub.getFovMinPitch(mm);
+            Double maxPitch = sub.getFovMaxPitch(mm);
             inv.setItem(32, createGuiItem(Material.SPYGLASS, "§eFOV Pitch Clamps",
-                    "§7Min: §f" + (sub.getFovMinPitch() != null ? sub.getFovMinPitch() + "°" : "Unlimited"),
-                    "§7Max: §f" + (sub.getFovMaxPitch() != null ? sub.getFovMaxPitch() + "°" : "Unlimited"),
+                    "§7Min (Inherited): §f" + (minPitch != null ? minPitch + "°" : "Unlimited"),
+                    "§7Max (Inherited): §f" + (maxPitch != null ? maxPitch + "°" : "Unlimited"),
                     " ",
-                    "§eLeft-Click to edit Min Pitch limit",
-                    "§eRight-Click to edit Max Pitch limit"
+                    "§cRead-only (Defined on Turret template)"
             ));
 
-            List<Double> cameraOffset = sub.getCameraOffset();
+            // Slot 33: Weapon-Cam Camera Offset (Read-only, inherited)
+            List<Double> cameraOffset = sub.getCameraOffset(mm);
             if (cameraOffset == null) cameraOffset = Arrays.asList(0.0, 0.0, 0.0);
             List<Double> finalCameraOffset = new ArrayList<>(cameraOffset);
             while (finalCameraOffset.size() < 3) finalCameraOffset.add(0.0);
 
             inv.setItem(33, createGuiItem(Material.ENDER_EYE, "§eWeapon-Cam Camera Offset",
                     "§7First-person spectator seat offset relative to subsystem.",
-                    "§7Current: §f" + String.format("%.2f, %.2f, %.2f", finalCameraOffset.get(0), finalCameraOffset.get(1), finalCameraOffset.get(2)),
+                    "§7Current (Inherited): §f" + String.format("%.2f, %.2f, %.2f", finalCameraOffset.get(0), finalCameraOffset.get(1), finalCameraOffset.get(2)),
                     " ",
-                    "§eLeft-Click to snap to your current position",
-                    "§eRight-Click to type custom coordinates"
+                    "§cRead-only (Defined on Turret template)"
             ));
-            List<Double> pivotOffset = sub.getPivotOffset();
+
+            // Slot 34: Pivot Point Offset (Read-only, inherited)
+            List<Double> pivotOffset = sub.getPivotOffset(mm);
             if (pivotOffset == null) pivotOffset = Arrays.asList(0.0, 0.0, 0.0);
             List<Double> finalPivotOffset = new ArrayList<>(pivotOffset);
             while (finalPivotOffset.size() < 3) finalPivotOffset.add(0.0);
 
-            inv.setItem(34, createGuiItem(Material.PISTON, "§ePivot Point Offset (Rotation Center)",
-                    "§7Displacement from subsystem origin representing rotation center.",
-                    "§7Current: §f" + String.format("%.2f, %.2f, %.2f", finalPivotOffset.get(0), finalPivotOffset.get(1), finalPivotOffset.get(2)),
+            inv.setItem(34, createGuiItem(Material.PISTON, "§ePivot Point Offset",
+                    "§7Rotation center relative to subsystem origin.",
+                    "§7Current (Inherited): §f" + String.format("%.2f, %.2f, %.2f", finalPivotOffset.get(0), finalPivotOffset.get(1), finalPivotOffset.get(2)),
                     " ",
-                    "§eLeft-Click to snap to your current position",
-                    "§eRight-Click to type custom coordinates"
+                    "§cRead-only (Defined on Turret template)"
             ));
+
+            // Slot 22: Weapon Modes (Shows list of linked projectile IDs or overrides)
+            List<BdeModel.ProjectileConfig> resolvedModes = sub.getWeaponModes(mm);
+            List<String> modesLore = new ArrayList<>();
+            boolean isOverridden = sub.getProjectileOverrides() != null && !sub.getProjectileOverrides().isEmpty();
+            if (isOverridden) {
+                modesLore.add("§6§lProjectiles (Custom Overrides active):");
+            } else {
+                modesLore.add("§7Projectiles (Turret Defaults):");
+            }
+            if (resolvedModes.isEmpty()) {
+                modesLore.add(" §7- None");
+            } else {
+                for (BdeModel.ProjectileConfig pc : resolvedModes) {
+                    modesLore.add(" §f• " + pc.getName() + " §7(Dmg: " + pc.getDamage() + ", Spd: " + pc.getSpeed() + ")");
+                }
+            }
+            modesLore.add(" ");
+            modesLore.add("§eLeft-Click to override projectiles.");
+            if (isOverridden) {
+                modesLore.add("§cRight-Click to reset to turret defaults.");
+            }
+
+            inv.setItem(22, createGuiItem(Material.BOW, "§6Weapon Modes (Projectiles)", modesLore.toArray(new String[0])));
+
+            // Slot 16: Interactive Placement Mode
             inv.setItem(16, createGuiItem(Material.ARMOR_STAND, "§a§lInteractive Placement Mode",
                     "§7Enter interactive visual editor to place",
                     "§7this subsystem in the world using your crosshair.",
                     " ",
                     "§eClick to enter placement mode."
+            ));
+
+            // Slot 38: Edit Mount Offset X
+            inv.setItem(38, createGuiItem(Material.RED_WOOL, "§cEdit Mount Offset X: §f" + String.format("%.2f", finalMountOffset.get(0)),
+                    "§7Controls left/right turret position.",
+                    " ",
+                    "§aLeft-Click to add 0.1",
+                    "§cRight-Click to subtract 0.1",
+                    "§aShift-Left-Click to add 0.01",
+                    "§cShift-Right-Click to subtract 0.01"
+            ));
+
+            // Slot 39: Edit Mount Offset Y
+            inv.setItem(39, createGuiItem(Material.GREEN_WOOL, "§aEdit Mount Offset Y: §f" + String.format("%.2f", finalMountOffset.get(1)),
+                    "§7Controls turret height.",
+                    " ",
+                    "§aLeft-Click to add 0.1",
+                    "§cRight-Click to subtract 0.1",
+                    "§aShift-Left-Click to add 0.01",
+                    "§cShift-Right-Click to subtract 0.01"
+            ));
+
+            // Slot 40: Edit Mount Offset Z
+            inv.setItem(40, createGuiItem(Material.BLUE_WOOL, "§9Edit Mount Offset Z: §f" + String.format("%.2f", finalMountOffset.get(2)),
+                    "§7Controls forward/backward turret position.",
+                    " ",
+                    "§aLeft-Click to add 0.1",
+                    "§cRight-Click to subtract 0.1",
+                    "§aShift-Left-Click to add 0.01",
+                    "§cShift-Right-Click to subtract 0.01"
             ));
         }
 
@@ -1351,11 +1430,11 @@ public class BdeGuiManager {
         player.openInventory(inv);
     }
 
-    public void openWeaponModeListMenu(Player player, ModelInstance instance, BdeModel model, String modelProjectId, int subsystemIndex) {
-        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.WEAPON_MODE_LIST,
+    public void openTurretLinkMenu(Player player, ModelInstance instance, BdeModel model, String modelProjectId, int subsystemIndex) {
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.TURRET_LINK_MENU,
                 instance != null ? instance.getId() : null,
                 modelProjectId, null, subsystemIndex, null);
-        Inventory inv = Bukkit.createInventory(holder, 54, "§8Weapon Modes Configuration");
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Select Turret Template");
 
         ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
         for (int i = 0; i < 54; i++) {
@@ -1364,44 +1443,81 @@ public class BdeGuiManager {
             }
         }
 
-        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Subsystem Details"));
-        inv.setItem(46, createGuiItem(Material.GUNPOWDER, "§aAdd New Weapon Mode", "§7Click to add a new weapon firing mode."));
+        ModelManager mm = plugin.getModelManager();
+        List<String> turretIds = mm.getAvailableTurretIds();
+
+        int slot = 9;
+        for (String tId : turretIds) {
+            if (slot >= 45) break;
+            if (slot % 9 == 0 || slot % 9 == 8) slot++;
+
+            TurretConfig tc = mm.getTurretTemplate(tId);
+            String name = tc != null ? tc.getName() : tId;
+            inv.setItem(slot, createGuiItem(Material.CROSSBOW, "§e§l" + name,
+                    "§7ID: §f" + tId,
+                    tc != null && tc.getBdeModelId() != null ? "§7Model: §f" + tc.getBdeModelId() : "§7Model: None",
+                    " ",
+                    "§eClick to link this turret template."
+            ));
+            slot++;
+        }
+
+        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Details"));
         inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
 
-        BdeModel.VehicleConfig cfg = model.getVehicle();
-        if (cfg != null && subsystemIndex >= 0 && subsystemIndex < cfg.getSubsystems().size()) {
-            BdeModel.SubsystemConfig sub = cfg.getSubsystems().get(subsystemIndex);
-            List<Integer> slots = java.util.Arrays.asList(
-                11, 12, 13, 14, 15, 16,
-                19, 20, 21, 22, 23, 24, 25,
-                28, 29, 30, 31, 32, 33, 34,
-                37, 38, 39, 40, 41, 42, 43
-            );
-            if (sub.getWeaponModes() != null) {
-                for (int i = 0; i < sub.getWeaponModes().size(); i++) {
-                    if (i >= slots.size()) break;
-                    BdeModel.ProjectileConfig proj = sub.getWeaponModes().get(i);
-                    inv.setItem(slots.get(i), createGuiItem(Material.FIREWORK_ROCKET, "§eWeapon Mode: §l" + proj.getName(),
-                            "§7Damage: §f" + proj.getDamage(),
-                            "§7Speed: §f" + proj.getSpeed(),
-                            "§7Cooldown: §f" + proj.getCooldown() + "s",
-                            "§7Lock-on: §f" + (proj.isLockOn() ? "Enabled" : "Disabled"),
-                            " ",
-                            "§bLeft-Click to edit weapon details",
-                            "§cRight-Click to delete weapon mode"
-                    ));
-                }
+        player.openInventory(inv);
+    }
+
+    public void openTurretCatalog(Player player) {
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.TURRET_CATALOG, null);
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Turret Templates");
+
+        ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 54; i++) {
+            if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) {
+                inv.setItem(i, pane);
             }
+        }
+
+        inv.setItem(46, createGuiItem(Material.ANVIL, "§aCreate New Turret", "§7Click to create a new turret template."));
+        inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
+
+        ModelManager mm = plugin.getModelManager();
+        List<String> turretIds = mm.getAvailableTurretIds();
+        int slot = 9;
+        for (String tId : turretIds) {
+            if (slot >= 45) break;
+            if (slot % 9 == 0 || slot % 9 == 8) slot++;
+
+            TurretConfig tc = mm.getTurretTemplate(tId);
+            String displayName = tc != null ? tc.getName() : tId;
+            int projCount = tc != null && tc.getProjectileIds() != null ? tc.getProjectileIds().size() : 0;
+            String modelId = tc != null && tc.getBdeModelId() != null ? tc.getBdeModelId() : "None";
+
+            inv.setItem(slot, createGuiItem(Material.CROSSBOW, "§e§l" + displayName,
+                    "§7ID: §f" + tId,
+                    "§7BDE Model: §f" + modelId,
+                    "§7Default Projectiles: §f" + projCount,
+                    " ",
+                    "§eLeft-Click to configure",
+                    "§cRight-Click to delete"
+            ));
+            slot++;
         }
 
         player.openInventory(inv);
     }
 
-    public void openWeaponModeDetailMenu(Player player, ModelInstance instance, BdeModel model, String modelProjectId, int subsystemIndex, int weaponModeIndex) {
-        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.WEAPON_MODE_DETAIL,
-                instance != null ? instance.getId() : null,
-                modelProjectId, null, subsystemIndex, weaponModeIndex);
-        Inventory inv = Bukkit.createInventory(holder, 54, "§8Weapon Mode Details");
+    public void openTurretEditor(Player player, String turretId) {
+        TurretConfig tc = plugin.getModelManager().getTurretTemplate(turretId);
+        if (tc == null) {
+            player.sendMessage("§cTurret template not found.");
+            return;
+        }
+
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.TURRET_EDITOR, null);
+        holder.setTurretId(turretId);
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Turret Editor: " + tc.getName());
 
         ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
         for (int i = 0; i < 54; i++) {
@@ -1410,91 +1526,422 @@ public class BdeGuiManager {
             }
         }
 
-        BdeModel.VehicleConfig cfg = model.getVehicle();
-        if (cfg != null && subsystemIndex >= 0 && subsystemIndex < cfg.getSubsystems().size()) {
-            BdeModel.SubsystemConfig sub = cfg.getSubsystems().get(subsystemIndex);
-            if (sub.getWeaponModes() != null && weaponModeIndex >= 0 && weaponModeIndex < sub.getWeaponModes().size()) {
-                BdeModel.ProjectileConfig proj = sub.getWeaponModes().get(weaponModeIndex);
+        inv.setItem(4, createGuiItem(Material.GOLDEN_CARROT, "§6Turret Info",
+                "§7ID: §f" + tc.getId(),
+                "§7Name: §f" + tc.getName()
+        ));
 
-                inv.setItem(10, createGuiItem(Material.NAME_TAG, "§eWeapon Name: §l" + proj.getName(),
-                        "§7Click to edit name."
-                ));
+        inv.setItem(10, createGuiItem(Material.NAME_TAG, "§eRename Turret",
+                "§7Current Name: §f" + tc.getName(),
+                " ",
+                "§eClick to rename in chat."
+        ));
 
-                inv.setItem(11, createGuiItem(Material.IRON_SWORD, "§eDamage: §f" + proj.getDamage(),
-                        "§aLeft-Click to increase by 1",
-                        "§cRight-Click to decrease by 1"
-                ));
+        inv.setItem(11, createGuiItem(Material.GOLDEN_HORSE_ARMOR, "§eSet BDE Model ID",
+                "§7Current Model: §f" + (tc.getBdeModelId() != null ? tc.getBdeModelId() : "None"),
+                " ",
+                "§eClick to edit model ID in chat."
+        ));
 
-                inv.setItem(12, createGuiItem(Material.FEATHER, "§eSpeed: §f" + proj.getSpeed(),
-                        "§aLeft-Click to increase by 0.1",
-                        "§cRight-Click to decrease by 0.1"
-                ));
+        inv.setItem(12, createGuiItem(Material.OAK_SIGN, "§eSet Display Tag",
+                "§7Current Tag: §f" + (tc.getDisplayTag() != null ? tc.getDisplayTag() : "None"),
+                " ",
+                "§eClick to edit tag in chat."
+        ));
 
-                inv.setItem(13, createGuiItem(Material.CLOCK, "§eCooldown: §f" + proj.getCooldown() + "s",
-                        "§aLeft-Click to increase by 0.1s",
-                        "§cRight-Click to decrease by 0.1s"
-                ));
+        // Offsets
+        List<Double> pivot = tc.getPivotOffset() != null ? tc.getPivotOffset() : Arrays.asList(0.0, 0.0, 0.0);
+        List<Double> launch = tc.getLaunchOffset() != null ? tc.getLaunchOffset() : Arrays.asList(0.0, 0.0, 0.0);
+        List<Double> camera = tc.getCameraOffset() != null ? tc.getCameraOffset() : Arrays.asList(0.0, 0.0, 0.0);
 
-                inv.setItem(14, createGuiItem(Material.ANVIL, "§eGravity: §f" + (proj.isHasGravity() ? "Enabled" : "Disabled"),
-                        "§eClick to toggle gravity status."
-                ));
+        while (pivot.size() < 3) pivot.add(0.0);
+        while (launch.size() < 3) launch.add(0.0);
+        while (camera.size() < 3) camera.add(0.0);
 
-                inv.setItem(15, createGuiItem(Material.TNT, "§eOn Hit Behavior: §f" + proj.getOnHit().toUpperCase(),
-                        "§eClick to toggle (despawn / explode / laser)."
-                ));
+        inv.setItem(14, createGuiItem(Material.PISTON, "§ePivot Offset",
+                "§7Offset: §f" + String.format("%.2f, %.2f, %.2f", pivot.get(0), pivot.get(1), pivot.get(2)),
+                " ",
+                "§7Defined relative to turret base origin.",
+                "§aClick to enter interactive placement (pivot stage only)"
+        ));
 
-                inv.setItem(16, createGuiItem(Material.FIREWORK_STAR, "§eExplosion Power: §f" + proj.getExplosionPower(),
-                        "§aLeft-Click to increase by 0.5",
-                        "§cRight-Click to decrease by 0.5"
-                ));
+        inv.setItem(15, createGuiItem(Material.FIREWORK_ROCKET, "§eMuzzle (Launch) Offset",
+                "§7Offset: §f" + String.format("%.2f, %.2f, %.2f", launch.get(0), launch.get(1), launch.get(2)),
+                " ",
+                "§7Defined relative to turret pivot point.",
+                "§aClick to enter interactive placement (muzzle stage only)"
+        ));
 
-                inv.setItem(19, createGuiItem(Material.TNT_MINECART, "§eDestroy Blocks: §f" + (proj.isDestroyBlocks() ? "Yes" : "No"),
-                        "§eClick to toggle block destruction."
-                ));
+        inv.setItem(16, createGuiItem(Material.ENDER_EYE, "§eCamera Offset",
+                "§7Offset: §f" + String.format("%.2f, %.2f, %.2f", camera.get(0), camera.get(1), camera.get(2)),
+                " ",
+                "§7First-person operator viewpoint.",
+                "§aClick to enter interactive placement (camera stage only)"
+        ));
 
-                inv.setItem(20, createGuiItem(Material.CREEPER_HEAD, "§eVanilla Explosion Damage: §f" + (proj.isVanillaExplosionDamage() ? "Yes" : "No"),
-                        "§eClick to toggle vanilla explosion damage."
-                ));
+        inv.setItem(22, createGuiItem(Material.ARMOR_STAND, "§a§lInteractive Placement Mode",
+                "§7Launches visual editor with your crosshair.",
+                "§7Spawns the turret model floating in front of you.",
+                " ",
+                "§eClick to calibrate Pivot, Muzzle, and Camera."
+        ));
 
-                inv.setItem(21, createGuiItem(Material.TARGET, "§eLock-On Homing: §f" + (proj.isLockOn() ? "Enabled" : "Disabled"),
-                        "§eClick to toggle target homing lock."
-                ));
+        // FOV Yaw/Pitch Clamps
+        inv.setItem(28, createGuiItem(Material.COMPASS, "§eFOV Min Yaw: §f" + (tc.getFovMinYaw() != null ? tc.getFovMinYaw() + "°" : "None"),
+                "§aLeft-Click to add 5.0°",
+                "§cRight-Click to subtract 5.0°",
+                "§aShift-Left-Click to add 1.0°",
+                "§cShift-Right-Click to subtract 1.0°"
+        ));
 
-                inv.setItem(22, createGuiItem(Material.SPYGLASS, "§eLock Range: §f" + proj.getLockRange(),
-                        "§aLeft-Click to increase by 5",
-                        "§cRight-Click to decrease by 5"
-                ));
+        inv.setItem(29, createGuiItem(Material.COMPASS, "§eFOV Max Yaw: §f" + (tc.getFovMaxYaw() != null ? tc.getFovMaxYaw() + "°" : "None"),
+                "§aLeft-Click to add 5.0°",
+                "§cRight-Click to subtract 5.0°",
+                "§aShift-Left-Click to add 1.0°",
+                "§cShift-Right-Click to subtract 1.0°"
+        ));
 
-                inv.setItem(23, createGuiItem(Material.COMPASS, "§eLock Angle: §f" + proj.getLockAngle() + "°",
-                        "§aLeft-Click to increase by 5°",
-                        "§cRight-Click to decrease by 5°"
-                ));
+        inv.setItem(30, createGuiItem(Material.SPYGLASS, "§eFOV Min Pitch: §f" + (tc.getFovMinPitch() != null ? tc.getFovMinPitch() + "°" : "None"),
+                "§aLeft-Click to add 5.0°",
+                "§cRight-Click to subtract 5.0°",
+                "§aShift-Left-Click to add 1.0°",
+                "§cShift-Right-Click to subtract 1.0°"
+        ));
 
-                inv.setItem(24, createGuiItem(Material.RECOVERY_COMPASS, "§eLock Time: §f" + proj.getLockTime() + "s",
-                        "§aLeft-Click to increase by 0.5s",
-                        "§cRight-Click to decrease by 0.5s"
-                ));
+        inv.setItem(31, createGuiItem(Material.SPYGLASS, "§eFOV Max Pitch: §f" + (tc.getFovMaxPitch() != null ? tc.getFovMaxPitch() + "°" : "None"),
+                "§aLeft-Click to add 5.0°",
+                "§cRight-Click to subtract 5.0°",
+                "§aShift-Left-Click to add 1.0°",
+                "§cShift-Right-Click to subtract 1.0°"
+        ));
 
-                inv.setItem(28, createGuiItem(Material.ARMOR_STAND, "§eBDE Projectile Model ID: §f" + (proj.getBdeModelId() != null ? proj.getBdeModelId() : "None"),
-                        "§7Click to edit model ID."
-                ));
+        // Projectiles
+        List<String> projs = tc.getProjectileIds();
+        List<String> lore = new ArrayList<>();
+        lore.add("§7Currently linked default projectiles:");
+        if (projs == null || projs.isEmpty()) {
+            lore.add(" §7- None");
+        } else {
+            for (String pId : projs) {
+                lore.add(" §f• " + pId);
+            }
+        }
+        lore.add(" ");
+        lore.add("§eClick to link/unlink default projectiles.");
+        inv.setItem(37, createGuiItem(Material.BOW, "§6Default Projectiles", lore.toArray(new String[0])));
 
-                inv.setItem(29, createGuiItem(Material.JUKEBOX, "§eLaunch Sound: §f" + proj.getLaunchSound(),
-                        "§7Click to edit launch sound."
-                ));
+        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Catalog"));
+        inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
+        inv.setItem(53, createGuiItem(Material.LIME_DYE, "§aSave Changes", "§7Writes config changes to disk."));
 
-                inv.setItem(30, createGuiItem(Material.BLAZE_POWDER, "§eFly Particle: §f" + proj.getFlyParticle(),
-                        "§7Click to edit flight particle."
-                ));
+        player.openInventory(inv);
+    }
 
-                inv.setItem(31, createGuiItem(Material.GUNPOWDER, "§eImpact Particle: §f" + proj.getImpactParticle(),
-                        "§7Click to edit impact particle."
-                ));
+    public void openTurretProjectileLinkMenu(Player player, String turretId) {
+        TurretConfig tc = plugin.getModelManager().getTurretTemplate(turretId);
+        if (tc == null) return;
+
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.TURRET_PROJECTILE_LINK, null);
+        holder.setTurretId(turretId);
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Default Projectiles: " + tc.getName());
+
+        ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 54; i++) {
+            if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) {
+                inv.setItem(i, pane);
             }
         }
 
-        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Weapon Mode List"));
+        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Editor"));
         inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
+
+        ModelManager mm = plugin.getModelManager();
+        List<String> available = mm.getAvailableProjectileIds();
+        List<String> linked = tc.getProjectileIds() != null ? tc.getProjectileIds() : new ArrayList<>();
+
+        int slot = 9;
+        for (String pId : available) {
+            if (slot >= 45) break;
+            if (slot % 9 == 0 || slot % 9 == 8) slot++;
+
+            boolean isLinked = linked.contains(pId);
+            Material mat = isLinked ? Material.LIME_DYE : Material.GRAY_DYE;
+            String status = isLinked ? "§a§lLINKED" : "§7UNLINKED";
+            
+            inv.setItem(slot, createGuiItem(mat, "§e§l" + pId,
+                    "§7Status: " + status,
+                    " ",
+                    "§eClick to toggle link status."
+            ));
+            slot++;
+        }
+
+        player.openInventory(inv);
+    }
+
+    public void openProjectileCatalog(Player player) {
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.PROJECTILE_CATALOG, null);
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Projectile Templates");
+
+        ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 54; i++) {
+            if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) {
+                inv.setItem(i, pane);
+            }
+        }
+
+        inv.setItem(46, createGuiItem(Material.ANVIL, "§aCreate New Projectile", "§7Click to create a new projectile template."));
+        inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
+
+        ModelManager mm = plugin.getModelManager();
+        List<String> projIds = mm.getAvailableProjectileIds();
+        int slot = 9;
+        for (String pId : projIds) {
+            if (slot >= 45) break;
+            if (slot % 9 == 0 || slot % 9 == 8) slot++;
+
+            BdeModel.ProjectileConfig pc = mm.getProjectileConfig(pId);
+            String displayName = pc != null ? pc.getName() : pId;
+            double damage = pc != null ? pc.getDamage() : 0.0;
+            double speed = pc != null ? pc.getSpeed() : 0.0;
+
+            inv.setItem(slot, createGuiItem(Material.ARROW, "§e§l" + displayName,
+                    "§7ID: §f" + pId,
+                    "§7Damage: §f" + damage,
+                    "§7Speed: §f" + speed,
+                    " ",
+                    "§eLeft-Click to configure",
+                    "§cRight-Click to delete"
+            ));
+            slot++;
+        }
+
+        player.openInventory(inv);
+    }
+
+    public void openProjectileEditor(Player player, String projectileId) {
+        BdeModel.ProjectileConfig pc = plugin.getModelManager().getProjectileConfig(projectileId);
+        if (pc == null) {
+            player.sendMessage("§cProjectile template not found.");
+            return;
+        }
+
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.PROJECTILE_EDITOR, null);
+        holder.setProjectileId(projectileId);
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Projectile Editor: " + pc.getName());
+
+        ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 54; i++) {
+            if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) {
+                inv.setItem(i, pane);
+            }
+        }
+
+        inv.setItem(4, createGuiItem(Material.GOLDEN_CARROT, "§6Projectile Info",
+                "§7ID: §f" + projectileId,
+                "§7Name: §f" + pc.getName()
+        ));
+
+        // Row 2 (Identity & Physics)
+        inv.setItem(10, createGuiItem(Material.NAME_TAG, "§eRename Projectile",
+                "§7Current Name: §f" + pc.getName(),
+                " ",
+                "§eClick to rename in chat."
+        ));
+
+        inv.setItem(11, createGuiItem(Material.GOLDEN_HORSE_ARMOR, "§eSet BDE Model ID",
+                "§7Current Model: §f" + (pc.getBdeModelId() != null ? pc.getBdeModelId() : "None"),
+                " ",
+                "§eClick to edit model ID in chat."
+        ));
+
+        inv.setItem(19, createGuiItem(Material.SUGAR, "§bSpeed: §e" + String.format("%.2f", pc.getSpeed()),
+                "§aLeft-Click to add 0.1",
+                "§cRight-Click to subtract 0.1",
+                "§aShift-Left-Click to add 0.5",
+                "§cShift-Right-Click to subtract 0.5"
+        ));
+
+        inv.setItem(20, createGuiItem(Material.DIAMOND_SWORD, "§bDamage: §e" + String.format("%.2f", pc.getDamage()),
+                "§aLeft-Click to add 1.0",
+                "§cRight-Click to subtract 1.0",
+                "§aShift-Left-Click to add 5.0",
+                "§cShift-Right-Click to subtract 5.0"
+        ));
+
+        inv.setItem(21, createGuiItem(Material.CLOCK, "§bCooldown: §e" + String.format("%.2f s", pc.getCooldown()),
+                "§aLeft-Click to add 0.1",
+                "§cRight-Click to subtract 0.1",
+                "§aShift-Left-Click to add 0.5",
+                "§cShift-Right-Click to subtract 0.5"
+        ));
+
+        inv.setItem(22, createGuiItem(pc.isHasGravity() ? Material.FEATHER : Material.STRUCTURE_VOID,
+                "§bHas Gravity: " + (pc.isHasGravity() ? "§a§lYES" : "§c§lNO"),
+                "§eClick to toggle gravity."
+        ));
+
+        // Row 3 (Impact & Effects)
+        inv.setItem(28, createGuiItem(Material.TNT, "§bOn Hit Action: §e" + pc.getOnHit().toUpperCase(),
+                "§eClick to cycle action (explode -> despawn -> laser)."
+        ));
+
+        inv.setItem(29, createGuiItem(Material.FIRE_CHARGE, "§bExplosion Power: §e" + String.format("%.2f", pc.getExplosionPower()),
+                "§aLeft-Click to add 0.5",
+                "§cRight-Click to subtract 0.5",
+                "§aShift-Left-Click to add 0.1",
+                "§cShift-Right-Click to subtract 0.1"
+        ));
+
+        inv.setItem(30, createGuiItem(pc.isDestroyBlocks() ? Material.COBBLESTONE : Material.BARRIER,
+                "§bDestroy Blocks: " + (pc.isDestroyBlocks() ? "§a§lYES" : "§c§lNO"),
+                "§eClick to toggle block destruction."
+        ));
+
+        inv.setItem(31, createGuiItem(pc.isVanillaExplosionDamage() ? Material.IRON_SWORD : Material.WOODEN_SWORD,
+                "§bVanilla Explosion Damage: " + (pc.isVanillaExplosionDamage() ? "§a§lYES" : "§c§lNO"),
+                "§eClick to toggle vanilla explosion calculation."
+        ));
+
+        inv.setItem(33, createGuiItem(Material.NOTE_BLOCK, "§eLaunch Sound",
+                "§7Sound: §f" + pc.getLaunchSound(),
+                "§7Volume: §f" + pc.getLaunchVolume() + " §7| Pitch: §f" + pc.getLaunchPitch(),
+                " ",
+                "§eClick to edit sound string in chat."
+        ));
+
+        inv.setItem(34, createGuiItem(Material.BLAZE_POWDER, "§eFly Particle",
+                "§7Particle: §f" + pc.getFlyParticle() + " §7(Count: " + pc.getFlyParticleCount() + ")",
+                " ",
+                "§eClick to edit particle type in chat."
+        ));
+
+        inv.setItem(35, createGuiItem(Material.FIREWORK_STAR, "§eImpact Particle",
+                "§7Particle: §f" + pc.getImpactParticle() + " §7(Count: " + pc.getImpactParticleCount() + ")",
+                " ",
+                "§eClick to edit particle type in chat."
+        ));
+
+        // Row 4 (Lock-On)
+        inv.setItem(37, createGuiItem(pc.isLockOn() ? Material.ENDER_EYE : Material.OBSERVER,
+                "§bLock-On Mode: " + (pc.isLockOn() ? "§a§lENABLED" : "§c§lDISABLED"),
+                "§eClick to toggle lock-on guidance."
+        ));
+
+        inv.setItem(38, createGuiItem(Material.BOW, "§bLock Range: §e" + String.format("%.1f blocks", pc.getLockRange()),
+                "§aLeft-Click to add 5.0",
+                "§cRight-Click to subtract 5.0",
+                "§aShift-Left-Click to add 1.0",
+                "§cShift-Right-Click to subtract 1.0"
+        ));
+
+        inv.setItem(39, createGuiItem(Material.COMPASS, "§bLock Angle: §e" + String.format("%.1f°", pc.getLockAngle()),
+                "§aLeft-Click to add 5.0",
+                "§cRight-Click to subtract 5.0",
+                "§aShift-Left-Click to add 1.0",
+                "§cShift-Right-Click to subtract 1.0"
+        ));
+
+        inv.setItem(40, createGuiItem(Material.CLOCK, "§bLock Time: §e" + String.format("%.1f s", pc.getLockTime()),
+                "§aLeft-Click to add 0.5",
+                "§cRight-Click to subtract 0.5",
+                "§aShift-Left-Click to add 0.1",
+                "§cShift-Right-Click to subtract 0.1"
+        ));
+
+        // Row 5 (Base Point and Direction Vector)
+        List<Double> bp = pc.getBasePoint();
+        List<Double> dv = pc.getDirectionVector();
+        while (bp.size() < 3) bp.add(0.0);
+        while (dv.size() < 3) dv.add(0.0);
+
+        inv.setItem(41, createGuiItem(Material.PISTON, "§eModel Base Point (Offset)",
+                "§7Offset: §f" + String.format("%.2f, %.2f, %.2f", bp.get(0), bp.get(1), bp.get(2)),
+                " ",
+                "§7Offsets display relative to launch point.",
+                "§eClick to type custom coords in chat."
+        ));
+
+        inv.setItem(42, createGuiItem(Material.ARROW, "§eModel Direction Vector",
+                "§7Vector: §f" + String.format("%.2f, %.2f, %.2f", dv.get(0), dv.get(1), dv.get(2)),
+                " ",
+                "§7Model forward pointing vector.",
+                "§eClick to type custom vector in chat."
+        ));
+
+        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Catalog"));
+        inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
+        inv.setItem(53, createGuiItem(Material.LIME_DYE, "§aSave Changes", "§7Writes config changes to disk."));
+
+        player.openInventory(inv);
+    }
+
+    public void openSubsystemProjectileOverrideMenu(Player player, ModelInstance instance, BdeModel model, String modelProjectId, int subsystemIndex) {
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.SUBSYSTEM_PROJECTILE_OVERRIDE,
+                instance != null ? instance.getId() : null,
+                modelProjectId, null, subsystemIndex, null);
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8Projectile Overrides");
+
+        ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 54; i++) {
+            if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) {
+                inv.setItem(i, pane);
+            }
+        }
+
+        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Subsystem"));
+        inv.setItem(46, createGuiItem(Material.RED_DYE, "§cReset to Turret Defaults", "§7Clears all custom projectile overrides."));
+        inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
+
+        BdeModel.VehicleConfig cfg = model.getVehicle();
+        if (cfg != null && subsystemIndex >= 0 && subsystemIndex < cfg.getSubsystems().size()) {
+            BdeModel.SubsystemConfig sub = cfg.getSubsystems().get(subsystemIndex);
+            
+            ModelManager mm = plugin.getModelManager();
+            List<String> available = mm.getAvailableProjectileIds();
+            
+            // Determine defaults from linked turret
+            List<String> defaults = new ArrayList<>();
+            if (sub.getTurretId() != null && !sub.getTurretId().isEmpty()) {
+                TurretConfig tc = mm.getTurretTemplate(sub.getTurretId());
+                if (tc != null && tc.getProjectileIds() != null) {
+                    defaults.addAll(tc.getProjectileIds());
+                }
+            }
+
+            List<String> overrides = sub.getProjectileOverrides() != null ? sub.getProjectileOverrides() : new ArrayList<>();
+
+            int slot = 9;
+            for (String pId : available) {
+                if (slot >= 45) break;
+                if (slot % 9 == 0 || slot % 9 == 8) slot++;
+
+                boolean isOverridden = overrides.contains(pId);
+                boolean isDefault = defaults.contains(pId);
+
+                Material mat;
+                String status;
+                if (isOverridden) {
+                    mat = Material.LIME_DYE;
+                    status = "§a§lOVERRIDDEN ACTIVE";
+                } else if (isDefault && overrides.isEmpty()) {
+                    mat = Material.GREEN_DYE;
+                    status = "§2§lACTIVE (Turret Default)";
+                } else {
+                    mat = Material.GRAY_DYE;
+                    status = "§7INACTIVE";
+                }
+
+                String defaultTag = isDefault ? " §7(Turret Default)" : "";
+
+                inv.setItem(slot, createGuiItem(mat, "§e§l" + pId + defaultTag,
+                        "§7Status: " + status,
+                        " ",
+                        "§eClick to toggle override status."
+                ));
+                slot++;
+            }
+        }
 
         player.openInventory(inv);
     }

@@ -22,6 +22,7 @@ import org.joml.Quaternionf;
 import org.joml.Vector3f;
 import top.sanscraft.bde.SansCraftBDEPlugin;
 import top.sanscraft.bde.model.BdeModel;
+import top.sanscraft.bde.model.TurretConfig;
 
 import java.io.File;
 import java.io.FileReader;
@@ -118,6 +119,9 @@ public class ModelManager {
     private final Map<UUID, Map<String, Long>> subsystemCooldowns = new HashMap<>(); // key: playerId -> (subsystemName -> lastUseTimestamp)
     private final Map<UUID, ItemStack> originalHotbarItems = new HashMap<>();
 
+    private final Map<String, TurretConfig> turretTemplates = new ConcurrentHashMap<>();
+    private final Map<String, BdeModel.ProjectileConfig> projectileTemplates = new ConcurrentHashMap<>();
+
     public enum PlacementStep {
         PIVOT_OFFSET,
         MOUNT_POINT,
@@ -143,6 +147,9 @@ public class ModelManager {
         public double vehicleOriginalScale = 1.0;
         public String vehicleModelId = null;
 
+        public boolean standaloneTurret = false;
+        public String turretId = null;
+
         public PlacementSession(UUID instanceId, int subsystemIndex) {
             this.originalInstanceId = instanceId;
             this.instanceId = instanceId;
@@ -160,9 +167,145 @@ public class ModelManager {
     public ModelManager(SansCraftBDEPlugin plugin) {
         this.plugin = plugin;
         this.inputTracker = new PlayerInputTracker(plugin);
+        
+        // Ensure directories exist
+        new File(plugin.getDataFolder(), "turrets").mkdirs();
+        new File(plugin.getDataFolder(), "projectiles").mkdirs();
+        
         startVehicleTick();
         startProjectileTick();
         runPlacementTickTask();
+    }
+
+    public TurretConfig loadTurretConfigSync(String id) throws Exception {
+        File file = new File(plugin.getDataFolder(), "turrets/" + id + ".json");
+        if (!file.exists()) {
+            throw new IOException("Turret template file not found: " + id);
+        }
+        try (FileReader reader = new FileReader(file)) {
+            TurretConfig turret = gson.fromJson(reader, TurretConfig.class);
+            turret.setId(id);
+            return turret;
+        }
+    }
+
+    public void saveTurretConfig(TurretConfig turret) {
+        String id = turret.getId();
+        if (id == null || id.isEmpty()) {
+            plugin.getLogger().warning("Failed to save turret: id is null or empty.");
+            return;
+        }
+        File file = new File(plugin.getDataFolder(), "turrets/" + id + ".json");
+        file.getParentFile().mkdirs();
+        try (FileWriter writer = new FileWriter(file)) {
+            gson.toJson(turret, writer);
+            turretTemplates.put(id, turret);
+        } catch (IOException e) {
+            plugin.getLogger().warning("Failed to save turret config for " + id + ": " + e.getMessage());
+        }
+    }
+
+    public TurretConfig getTurretTemplate(String id) {
+        if (id == null || id.isEmpty()) return null;
+        return turretTemplates.computeIfAbsent(id, k -> {
+            try {
+                return loadTurretConfigSync(k);
+            } catch (Exception e) {
+                return null;
+            }
+        });
+    }
+
+    public void clearTurretTemplatesCache() {
+        turretTemplates.clear();
+    }
+
+    public List<String> getAvailableTurretIds() {
+        List<String> list = new ArrayList<>();
+        File folder = new File(plugin.getDataFolder(), "turrets");
+        if (folder.exists() && folder.isDirectory()) {
+            File[] files = folder.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile() && f.getName().endsWith(".json")) {
+                        list.add(f.getName().substring(0, f.getName().length() - 5));
+                    }
+                }
+            }
+        }
+        return list;
+    }
+
+    public BdeModel.ProjectileConfig loadProjectileConfigSync(String id) throws Exception {
+        File file = new File(plugin.getDataFolder(), "projectiles/" + id + ".json");
+        if (!file.exists()) {
+            throw new IOException("Projectile template file not found: " + id);
+        }
+        try (FileReader reader = new FileReader(file)) {
+            BdeModel.ProjectileConfig config = gson.fromJson(reader, BdeModel.ProjectileConfig.class);
+            config.setName(id);
+            return config;
+        }
+    }
+
+    public void saveProjectileConfig(String id, BdeModel.ProjectileConfig config) {
+        if (id == null || id.isEmpty()) {
+            plugin.getLogger().warning("Failed to save projectile: id is null or empty.");
+            return;
+        }
+        File file = new File(plugin.getDataFolder(), "projectiles/" + id + ".json");
+        file.getParentFile().mkdirs();
+        try (FileWriter writer = new FileWriter(file)) {
+            gson.toJson(config, writer);
+            projectileTemplates.put(id, config);
+        } catch (IOException e) {
+            plugin.getLogger().warning("Failed to save projectile config for " + id + ": " + e.getMessage());
+        }
+    }
+
+    public BdeModel.ProjectileConfig getProjectileConfig(String id) {
+        if (id == null || id.isEmpty()) return null;
+        return projectileTemplates.computeIfAbsent(id, k -> {
+            try {
+                return loadProjectileConfigSync(k);
+            } catch (Exception e) {
+                return null;
+            }
+        });
+    }
+
+    public void clearProjectileTemplatesCache() {
+        projectileTemplates.clear();
+    }
+
+    public List<String> getAvailableProjectileIds() {
+        List<String> list = new ArrayList<>();
+        File folder = new File(plugin.getDataFolder(), "projectiles");
+        if (folder.exists() && folder.isDirectory()) {
+            File[] files = folder.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.isFile() && f.getName().endsWith(".json")) {
+                        list.add(f.getName().substring(0, f.getName().length() - 5));
+                    }
+                }
+            }
+        }
+        return list;
+    }
+
+    public boolean deleteTurretConfig(String id) {
+        if (id == null || id.isEmpty()) return false;
+        turretTemplates.remove(id);
+        File file = new File(plugin.getDataFolder(), "turrets/" + id + ".json");
+        return file.exists() && file.delete();
+    }
+
+    public boolean deleteProjectileConfig(String id) {
+        if (id == null || id.isEmpty()) return false;
+        projectileTemplates.remove(id);
+        File file = new File(plugin.getDataFolder(), "projectiles/" + id + ".json");
+        return file.exists() && file.delete();
     }
 
     public PlayerInputTracker getInputTracker() {
@@ -300,12 +443,22 @@ public class ModelManager {
     public BdeModel loadModelSync(String id) throws Exception {
         if (id.matches("\\d{5,10}")) {
             File cacheFile = new File(plugin.getDataFolder(), "cache/" + id + ".json");
-            if (cacheFile.exists()) {
+            long cacheDurationMs = plugin.getConfig().getLong("cache-duration-minutes", 1440) * 60 * 1000;
+            if (cacheFile.exists() && (System.currentTimeMillis() - cacheFile.lastModified() < cacheDurationMs)) {
                 try (FileReader reader = new FileReader(cacheFile)) {
                     return gson.fromJson(reader, BdeModel.class);
-                }
+                } catch (IOException ignored) {}
             }
-            throw new Exception("Model not cached: " + id);
+            try {
+                return loadModel(id).get(10, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (Exception e) {
+                if (cacheFile.exists()) {
+                    try (FileReader reader = new FileReader(cacheFile)) {
+                        return gson.fromJson(reader, BdeModel.class);
+                    } catch (IOException ignored) {}
+                }
+                throw new Exception("Model not cached and failed to download: " + e.getMessage(), e);
+            }
         } else {
             File file = new File(plugin.getDataFolder(), "vehicles/" + id + ".json");
             boolean isVehicle = true;
@@ -549,9 +702,10 @@ public class ModelManager {
         if (model.getVehicle() != null && model.getVehicle().getSubsystems() != null) {
             for (int subIdx = 0; subIdx < model.getVehicle().getSubsystems().size(); subIdx++) {
                 BdeModel.SubsystemConfig sub = model.getVehicle().getSubsystems().get(subIdx);
-                if (sub.getBdeModelId() != null && !sub.getBdeModelId().isEmpty()) {
+                String subModelId = sub.getBdeModelId(this);
+                if (subModelId != null && !subModelId.isEmpty()) {
                     try {
-                        BdeModel subModel = loadModelSync(sub.getBdeModelId());
+                        BdeModel subModel = loadModelSync(subModelId);
                         if (subModel != null && subModel.getPassengers() != null) {
                             List<String> flatSubPassengers = new ArrayList<>();
                             for (String pSnbt : subModel.getPassengers()) {
@@ -582,12 +736,13 @@ public class ModelManager {
 
                                 display.addScoreboardTag("bde_passenger");
                                 display.addScoreboardTag("bde_model_" + uuidStr);
-                                if (sub.getDisplayTag() != null) {
-                                    display.addScoreboardTag(sub.getDisplayTag());
+                                String subDisplayTag = sub.getDisplayTag(this);
+                                if (subDisplayTag != null) {
+                                    display.addScoreboardTag(subDisplayTag);
                                 }
 
                                 // Set metadata to identify this as part of a subsystem model
-                                display.setMetadata("bde_subsystem_model_id", new FixedMetadataValue(plugin, sub.getBdeModelId()));
+                                display.setMetadata("bde_subsystem_model_id", new FixedMetadataValue(plugin, subModelId));
                                 display.setMetadata("bde_subsystem_index", new FixedMetadataValue(plugin, i));
                                 display.setMetadata("bde_subsystem_parent_index", new FixedMetadataValue(plugin, subIdx));
 
@@ -607,7 +762,7 @@ public class ModelManager {
                             }
                         }
                     } catch (Exception e) {
-                        plugin.getLogger().log(java.util.logging.Level.WARNING, "Failed to load subsystem BDE model: " + sub.getBdeModelId(), e);
+                        plugin.getLogger().log(java.util.logging.Level.WARNING, "Failed to load subsystem BDE model: " + subModelId, e);
                     }
                 }
             }
@@ -1043,6 +1198,10 @@ public class ModelManager {
      * Applies the transformation matrix from SNBT to any Display entity (block or item).
      */
     private void applyTransformation(Display display, String snbt, double scale, float mountHeight, BdeModel model, boolean isPassenger, float yaw, float pitch, boolean hasVehicleRoot) {
+        applyTransformation(display, snbt, scale, mountHeight, model, isPassenger, yaw, pitch, hasVehicleRoot, null, null);
+    }
+
+    private void applyTransformation(Display display, String snbt, double scale, float mountHeight, BdeModel model, boolean isPassenger, float yaw, float pitch, boolean hasVehicleRoot, List<Double> basePoint, List<Double> directionVector) {
         int transIdx = snbt.indexOf("transformation:[");
         if (transIdx != -1) {
             int endTrans = snbt.indexOf("]", transIdx);
@@ -1058,6 +1217,28 @@ public class ModelManager {
 
                 Matrix4f matrix = new Matrix4f();
                 matrix.setTransposed(m);
+
+                // Apply direction vector rotation to align with +Z (0,0,1)
+                if (directionVector != null && directionVector.size() == 3) {
+                    Vector3f from = new Vector3f(
+                        (float) directionVector.get(0).doubleValue(),
+                        (float) directionVector.get(1).doubleValue(),
+                        (float) directionVector.get(2).doubleValue()
+                    );
+                    if (from.length() > 1e-4) {
+                        from.normalize();
+                        Vector3f to = new Vector3f(0, 0, 1);
+                        if (from.distance(to) > 1e-4) {
+                            Quaternionf rot = new Quaternionf().rotationTo(from, to);
+                            matrix.rotate(rot);
+                        }
+                    }
+                }
+
+                // Apply base point translation
+                if (basePoint != null && basePoint.size() == 3) {
+                    matrix.translate((float) -basePoint.get(0).doubleValue(), (float) -basePoint.get(1).doubleValue(), (float) -basePoint.get(2).doubleValue());
+                }
 
                 Matrix4f finalMatrix;
                 if (isPassenger) {
@@ -1343,17 +1524,17 @@ public class ModelManager {
                                         subPitch = rider.getLocation().getPitch();
                                     }
                                     double relativeYaw = ((subYaw - vehicleRoot.getLocation().getYaw()) % 360.0 + 540.0) % 360.0 - 180.0;
-                                    if (sub.getFovMinYaw() != null) relativeYaw = Math.max(sub.getFovMinYaw(), relativeYaw);
-                                    if (sub.getFovMaxYaw() != null) relativeYaw = Math.min(sub.getFovMaxYaw(), relativeYaw);
+                                    if (sub.getFovMinYaw(this) != null) relativeYaw = Math.max(sub.getFovMinYaw(this), relativeYaw);
+                                    if (sub.getFovMaxYaw(this) != null) relativeYaw = Math.min(sub.getFovMaxYaw(this), relativeYaw);
                                     double relativePitch = subPitch;
-                                    if (sub.getFovMinPitch() != null) relativePitch = Math.max(sub.getFovMinPitch(), relativePitch);
-                                    if (sub.getFovMaxPitch() != null) relativePitch = Math.min(sub.getFovMaxPitch(), relativePitch);
+                                    if (sub.getFovMinPitch(this) != null) relativePitch = Math.max(sub.getFovMinPitch(this), relativePitch);
+                                    if (sub.getFovMaxPitch(this) != null) relativePitch = Math.min(sub.getFovMaxPitch(this), relativePitch);
 
                                     List<Double> mountOffset = sub.getMountOffset();
                                     if (mountOffset == null || mountOffset.isEmpty()) {
-                                        mountOffset = getSubsystemOffset(instance.getModel(), sub.getDisplayTag());
+                                        mountOffset = getSubsystemOffset(instance.getModel(), sub.getDisplayTag(this));
                                     }
-                                    List<Double> cameraOffset = sub.getCameraOffset();
+                                    List<Double> cameraOffset = sub.getCameraOffset(this);
                                     if (cameraOffset == null || cameraOffset.isEmpty()) {
                                         cameraOffset = Arrays.asList(0.0, 0.0, 0.0);
                                     }
@@ -1369,7 +1550,7 @@ public class ModelManager {
                                         vehicleRoot.getLocation().getPitch(),
                                         relativeYaw,
                                         relativePitch,
-                                        sub.getPivotOffset()
+                                        sub.getPivotOffset(this)
                                     );
                                     psYaw = relativeYaw;
                                     camActive = true;
@@ -1407,17 +1588,17 @@ public class ModelManager {
                     for (BdeModel.SubsystemConfig sub : instance.getModel().getVehicle().getSubsystems()) {
                         if (sub.getControllerSeatIndex() == -1) {
                             double relativeYaw = ((driverRider.getLocation().getYaw() - vehicleRoot.getLocation().getYaw()) % 360.0 + 540.0) % 360.0 - 180.0;
-                            if (sub.getFovMinYaw() != null) relativeYaw = Math.max(sub.getFovMinYaw(), relativeYaw);
-                            if (sub.getFovMaxYaw() != null) relativeYaw = Math.min(sub.getFovMaxYaw(), relativeYaw);
+                            if (sub.getFovMinYaw(this) != null) relativeYaw = Math.max(sub.getFovMinYaw(this), relativeYaw);
+                            if (sub.getFovMaxYaw(this) != null) relativeYaw = Math.min(sub.getFovMaxYaw(this), relativeYaw);
                             double relativePitch = driverRider.getLocation().getPitch();
-                            if (sub.getFovMinPitch() != null) relativePitch = Math.max(sub.getFovMinPitch(), relativePitch);
-                            if (sub.getFovMaxPitch() != null) relativePitch = Math.min(sub.getFovMaxPitch(), relativePitch);
+                            if (sub.getFovMinPitch(this) != null) relativePitch = Math.max(sub.getFovMinPitch(this), relativePitch);
+                            if (sub.getFovMaxPitch(this) != null) relativePitch = Math.min(sub.getFovMaxPitch(this), relativePitch);
 
                             List<Double> mountOffset = sub.getMountOffset();
                             if (mountOffset == null || mountOffset.isEmpty()) {
-                                mountOffset = getSubsystemOffset(instance.getModel(), sub.getDisplayTag());
+                                mountOffset = getSubsystemOffset(instance.getModel(), sub.getDisplayTag(this));
                             }
-                            List<Double> cameraOffset = sub.getCameraOffset();
+                            List<Double> cameraOffset = sub.getCameraOffset(this);
                             if (cameraOffset == null || cameraOffset.isEmpty()) {
                                 cameraOffset = Arrays.asList(0.0, 0.0, 0.0);
                             }
@@ -1433,7 +1614,7 @@ public class ModelManager {
                                 vehicleRoot.getLocation().getPitch(),
                                 relativeYaw,
                                 relativePitch,
-                                sub.getPivotOffset()
+                                sub.getPivotOffset(this)
                             );
                             
                             if (vehicleRoot.getPassengers().contains(driverSeat)) {
@@ -2467,9 +2648,9 @@ public class ModelManager {
                         if ("explode".equalsIgnoreCase(config.getOnHit())) {
                             Location explLoc = nextLoc;
                             if (config.isVanillaExplosionDamage()) {
-                                explLoc.getWorld().createExplosion(explLoc, (float) config.getExplosionPower(), config.isDestroyBlocks(), config.isDestroyBlocks());
+                                explLoc.getWorld().createExplosion(explLoc, (float) config.getExplosionPower(), config.isDestroyBlocks(), config.isDestroyBlocks(), base);
                             } else {
-                                explLoc.getWorld().createExplosion(explLoc, (float) config.getExplosionPower(), false, false);
+                                explLoc.getWorld().createExplosion(explLoc, (float) config.getExplosionPower(), false, false, base);
                                 
                                 double rad = config.getExplosionPower() * 2.0;
                                 for (Entity e : explLoc.getWorld().getNearbyEntities(explLoc, rad, rad, rad)) {
@@ -2573,7 +2754,7 @@ public class ModelManager {
             List<Display> subDisplays = new ArrayList<>();
             int subIdx = model.getVehicle().getSubsystems().indexOf(sub);
             for (Display display : instance.getPassengers()) {
-                if (sub.getDisplayTag() != null && !sub.getDisplayTag().isEmpty() && display.getScoreboardTags().contains(sub.getDisplayTag())) {
+                if (sub.getDisplayTag(this) != null && !sub.getDisplayTag(this).isEmpty() && display.getScoreboardTags().contains(sub.getDisplayTag(this))) {
                     subDisplays.add(display);
                 } else if (display.hasMetadata("bde_subsystem_parent_index") &&
                            display.getMetadata("bde_subsystem_parent_index").get(0).asInt() == subIdx) {
@@ -2637,7 +2818,7 @@ public class ModelManager {
                     updateSubsystemTransform(display, scale, mountHeight, model, (float) rootLoc.getYaw(), (float) rootLoc.getPitch(), subYaw, subPitch, sub);
                 }
 
-                List<BdeModel.ProjectileConfig> modes = sub.getWeaponModes();
+                List<BdeModel.ProjectileConfig> modes = sub.getWeaponModes(this);
                 if (!modes.isEmpty()) {
                     int modeIdx = instance.getSubsystemMode(controller.getUniqueId(), sub.getName());
                     BdeModel.ProjectileConfig mode = modes.get(modeIdx);
@@ -2861,11 +3042,11 @@ public class ModelManager {
 
                     // Clamp relative yaw/pitch by FOV limits
                     double relativeYaw = ((subYaw - yaw) % 360.0 + 540.0) % 360.0 - 180.0;
-                    if (sub.getFovMinYaw() != null) relativeYaw = Math.max(sub.getFovMinYaw(), relativeYaw);
-                    if (sub.getFovMaxYaw() != null) relativeYaw = Math.min(sub.getFovMaxYaw(), relativeYaw);
+                    if (sub.getFovMinYaw(this) != null) relativeYaw = Math.max(sub.getFovMinYaw(this), relativeYaw);
+                    if (sub.getFovMaxYaw(this) != null) relativeYaw = Math.min(sub.getFovMaxYaw(this), relativeYaw);
                     double relativePitch = subPitch;
-                    if (sub.getFovMinPitch() != null) relativePitch = Math.max(sub.getFovMinPitch(), relativePitch);
-                    if (sub.getFovMaxPitch() != null) relativePitch = Math.min(sub.getFovMaxPitch(), relativePitch);
+                    if (sub.getFovMinPitch(this) != null) relativePitch = Math.max(sub.getFovMinPitch(this), relativePitch);
+                    if (sub.getFovMaxPitch(this) != null) relativePitch = Math.min(sub.getFovMaxPitch(this), relativePitch);
 
                     // Compute translation: seatOffset back to vehicle origin, then mountOffset
                     float dx = 0.0f;
@@ -2906,16 +3087,17 @@ public class ModelManager {
                     float px = 0.0f;
                     float py = 0.0f;
                     float pz = 0.0f;
-                    boolean hasPivot = sub.getPivotOffset() != null && sub.getPivotOffset().size() == 3;
+                    List<Double> pivot = sub.getPivotOffset(this);
+                    boolean hasPivot = pivot != null && pivot.size() == 3;
                     if (hasPivot) {
-                        px = (float) (sub.getPivotOffset().get(0) * scale);
-                        py = (float) (sub.getPivotOffset().get(1) * scale);
-                        pz = (float) (sub.getPivotOffset().get(2) * scale);
+                        px = (float) (pivot.get(0) * scale);
+                        py = (float) (pivot.get(1) * scale);
+                        pz = (float) (pivot.get(2) * scale);
                         mPass.translate(px, py, pz);
                     }
 
                     mPass.rotateY((float) Math.toRadians(-relativeYaw));
-                    mPass.rotateX((float) Math.toRadians(relativePitch));
+                    mPass.rotateX((float) Math.toRadians(-relativePitch));
 
                     if (hasPivot) {
                         mPass.translate(-px, -py, -pz);
@@ -2931,7 +3113,7 @@ public class ModelManager {
     }
 
     public void triggerSubsystemAction(ModelInstance instance, BdeModel.SubsystemConfig sub, Player player) {
-        List<BdeModel.ProjectileConfig> modes = sub.getWeaponModes();
+        List<BdeModel.ProjectileConfig> modes = sub.getWeaponModes(this);
         if (modes.isEmpty()) return;
 
         int modeIdx = instance.getSubsystemMode(player.getUniqueId(), sub.getName());
@@ -2955,7 +3137,9 @@ public class ModelManager {
         Entity vehicleRoot = instance.getVehicleRoot();
         double scale = instance.getScale();
         
-        if (sub.getLaunchOffset() != null && sub.getLaunchOffset().size() == 3 && vehicleRoot != null) {
+        org.bukkit.util.Vector velocity;
+        List<Double> launchOffset = sub.getLaunchOffset(this);
+        if (launchOffset != null && launchOffset.size() == 3 && vehicleRoot != null) {
             double subYaw;
             double subPitch;
             if (instance.isSubsystemWasdAiming(sub.getName())) {
@@ -2966,21 +3150,21 @@ public class ModelManager {
                 subPitch = player.getLocation().getPitch();
             }
             double relativeYaw = ((subYaw - vehicleRoot.getLocation().getYaw()) % 360.0 + 540.0) % 360.0 - 180.0;
-            if (sub.getFovMinYaw() != null) relativeYaw = Math.max(sub.getFovMinYaw(), relativeYaw);
-            if (sub.getFovMaxYaw() != null) relativeYaw = Math.min(sub.getFovMaxYaw(), relativeYaw);
+            if (sub.getFovMinYaw(this) != null) relativeYaw = Math.max(sub.getFovMinYaw(this), relativeYaw);
+            if (sub.getFovMaxYaw(this) != null) relativeYaw = Math.min(sub.getFovMaxYaw(this), relativeYaw);
             double relativePitch = subPitch;
-            if (sub.getFovMinPitch() != null) relativePitch = Math.max(sub.getFovMinPitch(), relativePitch);
-            if (sub.getFovMaxPitch() != null) relativePitch = Math.min(sub.getFovMaxPitch(), relativePitch);
+            if (sub.getFovMinPitch(this) != null) relativePitch = Math.max(sub.getFovMinPitch(this), relativePitch);
+            if (sub.getFovMaxPitch(this) != null) relativePitch = Math.min(sub.getFovMaxPitch(this), relativePitch);
 
             List<Double> mountOffset = sub.getMountOffset();
             if (mountOffset == null || mountOffset.isEmpty()) {
-                mountOffset = getSubsystemOffset(instance.getModel(), sub.getDisplayTag());
+                mountOffset = getSubsystemOffset(instance.getModel(), sub.getDisplayTag(this));
             }
 
             launchLoc = ModelTransformEngine.getSubsystemComponentPosition(
                 vehicleRoot.getLocation(),
                 mountOffset,
-                sub.getLaunchOffset(),
+                launchOffset,
                 instance.getModel().getSeatOffset(),
                 scale,
                 instance.getModel().getFrontYawOffset(),
@@ -2988,13 +3172,20 @@ public class ModelManager {
                 vehicleRoot.getLocation().getPitch(),
                 relativeYaw,
                 relativePitch,
-                sub.getPivotOffset()
+                sub.getPivotOffset(this)
             );
+
+            double finalYaw = vehicleRoot.getLocation().getYaw() + relativeYaw;
+            double finalPitch = relativePitch;
+            launchLoc.setYaw((float) finalYaw);
+            launchLoc.setPitch((float) finalPitch);
+            velocity = launchLoc.getDirection().multiply(config.getSpeed());
         } else {
             List<Display> subDisplays = new ArrayList<>();
             int subIdx = instance.getModel().getVehicle().getSubsystems().indexOf(sub);
             for (Display display : instance.getPassengers()) {
-                if (sub.getDisplayTag() != null && !sub.getDisplayTag().isEmpty() && display.getScoreboardTags().contains(sub.getDisplayTag())) {
+                String subDisplayTag = sub.getDisplayTag(this);
+                if (subDisplayTag != null && !subDisplayTag.isEmpty() && display.getScoreboardTags().contains(subDisplayTag)) {
                     subDisplays.add(display);
                 } else if (display.hasMetadata("bde_subsystem_parent_index") &&
                            display.getMetadata("bde_subsystem_parent_index").get(0).asInt() == subIdx) {
@@ -3009,9 +3200,9 @@ public class ModelManager {
                 org.bukkit.util.Vector dir = player.getLocation().getDirection();
                 launchLoc.add(dir.clone().multiply(0.8));
             }
+            velocity = player.getLocation().getDirection().multiply(config.getSpeed());
+            launchLoc.setDirection(velocity);
         }
-
-        org.bukkit.util.Vector velocity = player.getLocation().getDirection().multiply(config.getSpeed());
 
         Entity target = null;
         boolean fullLock = false;
@@ -3033,7 +3224,7 @@ public class ModelManager {
         if ("laser".equalsIgnoreCase(config.getOnHit())) {
             // Draw a laser beam line and damage entities
             org.bukkit.World world = launchLoc.getWorld();
-            org.bukkit.util.Vector dir = player.getLocation().getDirection();
+            org.bukkit.util.Vector dir = launchLoc.getDirection();
             double maxDist = config.getLockRange() > 0 ? config.getLockRange() : 30.0;
             
             for (double d = 0.5; d < maxDist; d += 0.5) {
@@ -3085,6 +3276,7 @@ public class ModelManager {
             base.setSilent(true);
             base.setShooter(player);
             base.setVelocity(velocity);
+            base.setMetadata("bde_projectile", new FixedMetadataValue(plugin, true));
 
             org.bukkit.entity.BlockDisplay display = launchLoc.getWorld().spawn(launchLoc, org.bukkit.entity.BlockDisplay.class);
             display.setBlock(Bukkit.createBlockData("minecraft:stone"));
@@ -3097,7 +3289,7 @@ public class ModelManager {
                 if (projModel != null && projModel.getPassengers() != null && !projModel.getPassengers().isEmpty()) {
                     String firstPassenger = splitObjects(projModel.getPassengers().get(0)).get(0);
                     applyBlockDisplayData(display, firstPassenger, 1.0);
-                    applyTransformation(display, firstPassenger, 1.0, 0f, projModel, false, (float) launchLoc.getYaw(), (float) launchLoc.getPitch(), false);
+                    applyTransformation(display, firstPassenger, 1.0, 0f, projModel, false, (float) launchLoc.getYaw(), (float) launchLoc.getPitch(), false, config.getBasePoint(), config.getDirectionVector());
                 }
             } catch (Exception ignored) {}
 
@@ -3108,6 +3300,7 @@ public class ModelManager {
             base.setGravity(config.isHasGravity());
             base.setShooter(player);
             base.setVelocity(velocity);
+            base.setMetadata("bde_projectile", new FixedMetadataValue(plugin, true));
 
             CustomProjectile customProj = new CustomProjectile(base, null, player, config, velocity, target, fullLock, targetCoord);
             activeProjectiles.add(customProj);
@@ -3148,9 +3341,10 @@ public class ModelManager {
             meta.setDisplayName("§e§lSubsystem Operator Controls");
             List<String> lore = new ArrayList<>();
             String weaponName = "None";
-            if (sub.getWeaponModes() != null && !sub.getWeaponModes().isEmpty()) {
+            List<BdeModel.ProjectileConfig> weaponModes = sub.getWeaponModes(this);
+            if (weaponModes != null && !weaponModes.isEmpty()) {
                 int modeIdx = instance.getSubsystemMode(playerId, sub.getName());
-                weaponName = sub.getWeaponModes().get(modeIdx).getName();
+                weaponName = weaponModes.get(modeIdx).getName();
             }
             lore.add("§7Current Weapon: §f" + weaponName);
             lore.add("§7------------------------");
@@ -3191,6 +3385,10 @@ public class ModelManager {
         }
 
         BdeModel.SubsystemConfig sub = model.getVehicle().getSubsystems().get(subIdx);
+        if (sub.getTurretId() == null || sub.getTurretId().isEmpty()) {
+            player.sendMessage("§cYou must link a turret template to this subsystem slot before entering placement mode.");
+            return;
+        }
 
         PlacementSession session = new PlacementSession(instanceId, subIdx);
         session.vehicleModelId = vehicleModelId;
@@ -3215,13 +3413,14 @@ public class ModelManager {
         session.subsystemOriginWorldLoc = origin;
 
         // Spawn subsystem BDE model floating in the air for Stage 1 & 2
-        if (sub.getBdeModelId() != null && !sub.getBdeModelId().isEmpty()) {
+        String subModelId = sub.getBdeModelId(this);
+        if (subModelId != null && !subModelId.isEmpty()) {
             try {
-                BdeModel subModel = loadModelSync(sub.getBdeModelId());
+                BdeModel subModel = loadModelSync(subModelId);
                 ModelInstance subInst = spawnModel(subModel, origin, session.vehicleOriginalScale);
                 session.tempSubsystemInstanceId = subInst.getId();
             } catch (Exception e) {
-                player.sendMessage("§cFailed to spawn subsystem preview model: " + e.getMessage());
+                player.sendMessage("§cFailed to spawn subsystem preview model: " + subModelId + ": " + e.getMessage());
             }
         }
 
@@ -3234,6 +3433,44 @@ public class ModelManager {
         player.sendMessage("§7Left Click: Save Pivot | Shift+Left Click: Cancel");
     }
 
+    public void startTurretPlacementSession(Player player, String turretId) {
+        TurretConfig turret = getTurretTemplate(turretId);
+        if (turret == null) {
+            player.sendMessage("§cTurret template not found: " + turretId);
+            return;
+        }
+
+        PlacementSession session = new PlacementSession(null, -1);
+        session.standaloneTurret = true;
+        session.turretId = turretId;
+
+        // Subsystem floating in air setup: 4 blocks in front of the player, aligned to world grid (yaw=0, pitch=0)
+        Location origin = player.getEyeLocation().add(player.getLocation().getDirection().multiply(4.0));
+        origin.setYaw(0.0f);
+        origin.setPitch(0.0f);
+        session.subsystemOriginWorldLoc = origin;
+
+        // Spawn subsystem BDE model floating in the air for Stage 1 & 2
+        String subModelId = turret.getBdeModelId();
+        if (subModelId != null && !subModelId.isEmpty()) {
+            try {
+                BdeModel subModel = loadModelSync(subModelId);
+                ModelInstance subInst = spawnModel(subModel, origin, 1.0);
+                session.tempSubsystemInstanceId = subInst.getId();
+            } catch (Exception e) {
+                player.sendMessage("§cFailed to spawn turret preview model: " + subModelId + ": " + e.getMessage());
+            }
+        }
+
+        placementSessions.put(player.getUniqueId(), session);
+        player.closeInventory();
+        
+        player.sendMessage("§eInteractive Turret Placement Mode started!");
+        player.sendMessage("§fStage 1: §b§lPivot Point Offset §7- Move crosshair/scroll to set the rotation center on the floating turret.");
+        player.sendMessage("§7Scroll mouse wheel to adjust distance from your eyes.");
+        player.sendMessage("§7Left Click: Save Pivot | Shift+Left Click: Cancel");
+    }
+
     public boolean isEditingPlacement(Player player) {
         return placementSessions.containsKey(player.getUniqueId());
     }
@@ -3241,6 +3478,16 @@ public class ModelManager {
     public void cancelPlacementSession(Player player) {
         PlacementSession session = placementSessions.remove(player.getUniqueId());
         if (session != null) {
+            if (session.standaloneTurret) {
+                if (session.tempSubsystemInstanceId != null) {
+                    removeInstance(session.tempSubsystemInstanceId);
+                }
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    plugin.getBdeGuiManager().openTurretEditor(player, session.turretId);
+                });
+                player.sendMessage("§cPlacement mode cancelled.");
+                return;
+            }
             if (session.tempSubsystemInstanceId != null) {
                 removeInstance(session.tempSubsystemInstanceId);
             }
@@ -3267,6 +3514,40 @@ public class ModelManager {
     public void advancePlacementStep(Player player) {
         PlacementSession session = placementSessions.get(player.getUniqueId());
         if (session == null) return;
+
+        if (session.standaloneTurret) {
+            TurretConfig turret = getTurretTemplate(session.turretId);
+            if (turret == null) {
+                placementSessions.remove(player.getUniqueId());
+                player.sendMessage("§cFailed to load turret config.");
+                return;
+            }
+
+            player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.8f, 1.0f);
+
+            if (session.step == PlacementStep.PIVOT_OFFSET) {
+                session.step = PlacementStep.LAUNCH_POINT;
+                player.sendMessage("§fStage 2: §6§lMuzzle Point §7- Position the projectile firing origin on the floating turret.");
+                player.sendMessage("§7Left Click: Save Muzzle | Shift+Left Click: Cancel");
+            } else if (session.step == PlacementStep.LAUNCH_POINT) {
+                session.step = PlacementStep.CAMERA_OFFSET;
+                player.sendMessage("§fStage 3: §a§lSpectator Camera §7- Position the first-person spectator view position.");
+                player.sendMessage("§7Left Click: Save Camera | Shift+Left Click: Cancel");
+            } else if (session.step == PlacementStep.CAMERA_OFFSET) {
+                placementSessions.remove(player.getUniqueId());
+                if (session.tempSubsystemInstanceId != null) {
+                    removeInstance(session.tempSubsystemInstanceId);
+                }
+                saveTurretConfig(turret);
+                player.sendMessage("§a§lPlacement Complete! Turret pivot, launch, and camera offsets configured successfully.");
+                player.playSound(player.getLocation(), org.bukkit.Sound.UI_TOAST_CHALLENGE_COMPLETE, 0.8f, 1.2f);
+                
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    plugin.getBdeGuiManager().openTurretEditor(player, session.turretId);
+                });
+            }
+            return;
+        }
 
         BdeModel model;
         try {
@@ -3319,6 +3600,13 @@ public class ModelManager {
             // Placement completed successfully!
             placementSessions.remove(player.getUniqueId());
 
+            if (sub.getTurretId() != null) {
+                TurretConfig turret = getTurretTemplate(sub.getTurretId());
+                if (turret != null) {
+                    saveTurretConfig(turret);
+                }
+            }
+
             if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
                 saveModelConfig(model);
             }
@@ -3356,20 +3644,31 @@ public class ModelManager {
                     }
 
                     PlacementSession session = entry.getValue();
-                    BdeModel model;
-                    BdeModel.SubsystemConfig sub;
-                    try {
-                        model = loadModelSync(session.vehicleModelId);
-                        sub = model.getVehicle().getSubsystems().get(session.subsystemIndex);
-                    } catch (Exception e) {
-                        placementSessions.remove(entry.getKey());
-                        continue;
+                    BdeModel model = null;
+                    BdeModel.SubsystemConfig sub = null;
+                    TurretConfig turret = null;
+
+                    if (!session.standaloneTurret) {
+                        try {
+                            model = loadModelSync(session.vehicleModelId);
+                            sub = model.getVehicle().getSubsystems().get(session.subsystemIndex);
+                            turret = sub.getTurretId() != null ? getTurretTemplate(sub.getTurretId()) : null;
+                        } catch (Exception e) {
+                            placementSessions.remove(entry.getKey());
+                            continue;
+                        }
+                    } else {
+                        turret = getTurretTemplate(session.turretId);
+                        if (turret == null) {
+                            placementSessions.remove(entry.getKey());
+                            continue;
+                        }
                     }
 
                     Location rootLoc = null;
                     double scale = session.vehicleOriginalScale;
 
-                    if (session.step == PlacementStep.MOUNT_POINT || session.step == PlacementStep.CAMERA_OFFSET) {
+                    if (!session.standaloneTurret && (session.step == PlacementStep.MOUNT_POINT || session.step == PlacementStep.CAMERA_OFFSET)) {
                         ModelInstance instance = activeInstances.get(session.instanceId);
                         if (instance == null || instance.getVehicleRoot() == null) {
                             placementSessions.remove(entry.getKey());
@@ -3379,11 +3678,6 @@ public class ModelManager {
                         rootLoc = instance.getVehicleRoot().getLocation();
                         scale = instance.getScale();
                     } else {
-                        // For PIVOT_OFFSET and LAUNCH_POINT, the floating sub-model's displays
-                        // ride as passengers at mountHeight above the armor_stand feet.
-                        // We need to measure coordinates from that riding position, not the feet,
-                        // because updateSubsystemTransform cancels out the vehicle's mountHeight
-                        // and applies pivotOffset relative to the mount point (display space).
                         ModelInstance tempSub = session.tempSubsystemInstanceId != null ? activeInstances.get(session.tempSubsystemInstanceId) : null;
                         if (tempSub != null && tempSub.getVehicleRoot() != null) {
                             BdeModel subModel = tempSub.getModel();
@@ -3409,7 +3703,7 @@ public class ModelManager {
                     double ry = dy;
                     double rz = dz;
 
-                    if (session.step == PlacementStep.MOUNT_POINT || session.step == PlacementStep.CAMERA_OFFSET) {
+                    if (!session.standaloneTurret && (session.step == PlacementStep.MOUNT_POINT || session.step == PlacementStep.CAMERA_OFFSET)) {
                         double revYawRad = Math.toRadians(-rootLoc.getYaw());
                         double cos = Math.cos(revYawRad);
                         double sin = Math.sin(revYawRad);
@@ -3456,44 +3750,55 @@ public class ModelManager {
                     String lockedStr = session.lockedAxes.isEmpty() ? "" : " §7[Locked: " + session.lockedAxes + "]";
 
                     if (session.step == PlacementStep.PIVOT_OFFSET) {
-                        List<Double> mount = sub.getMountOffset();
-                        if (mount == null || mount.size() != 3) {
-                            mount = java.util.Arrays.asList(0.0, 0.0, 0.0);
-                            sub.setMountOffset(mount);
-                        }
-                        double mx = mount.get(0);
-                        double my = mount.get(1);
-                        double mz = mount.get(2);
+                        double px = rx;
+                        double py = ry;
+                        double pz = rz;
 
-                        double px = rx - mx;
-                        double py = ry - my;
-                        double pz = rz - mz;
+                        if (!session.standaloneTurret) {
+                            List<Double> mount = sub.getMountOffset();
+                            if (mount == null || mount.size() != 3) {
+                                mount = java.util.Arrays.asList(0.0, 0.0, 0.0);
+                                sub.setMountOffset(mount);
+                            }
+                            double mx = mount.get(0);
+                            double my = mount.get(1);
+                            double mz = mount.get(2);
+
+                            px = rx - mx;
+                            py = ry - my;
+                            pz = rz - mz;
+                        }
 
                         px = Math.round(px / snap) * snap;
                         py = Math.round(py / snap) * snap;
                         pz = Math.round(pz / snap) * snap;
 
                         List<Double> pivot = java.util.Arrays.asList(px, py, pz);
-                        sub.setPivotOffset(pivot);
+                        if (turret != null) {
+                            turret.setPivotOffset(pivot);
+                        }
 
                         player.sendActionBar(Component.text("§b§lPivot Offset: §f" + String.format("%.2f, %.2f, %.2f", px, py, pz) + lockedStr + " §7| §aLeft Click: Save §7| §cShift+Left Click: Cancel"));
 
-                        Location pMount = ModelTransformEngine.getSubsystemComponentPosition(
-                            rootLoc,
-                            mount,
-                            java.util.Arrays.asList(0.0, 0.0, 0.0),
-                            null,
-                            scale,
-                            0.0,
-                            0.0,
-                            0.0,
-                            0.0,
-                            0.0,
-                            null
-                        );
+                        Location pMount = rootLoc.clone();
+                        if (!session.standaloneTurret) {
+                            pMount = ModelTransformEngine.getSubsystemComponentPosition(
+                                rootLoc,
+                                sub.getMountOffset(),
+                                java.util.Arrays.asList(0.0, 0.0, 0.0),
+                                null,
+                                scale,
+                                0.0,
+                                0.0,
+                                0.0,
+                                0.0,
+                                0.0,
+                                null
+                            );
+                        }
                         Location pPivot = ModelTransformEngine.getSubsystemComponentPosition(
                             rootLoc,
-                            mount,
+                            session.standaloneTurret ? java.util.Arrays.asList(0.0, 0.0, 0.0) : sub.getMountOffset(),
                             pivot,
                             null,
                             scale,
@@ -3510,28 +3815,36 @@ public class ModelManager {
                         } catch (Exception ignored) {}
 
                     } else if (session.step == PlacementStep.LAUNCH_POINT) {
-                        List<Double> mount = sub.getMountOffset();
-                        List<Double> pivot = sub.getPivotOffset();
-                        double mx = mount != null && mount.size() == 3 ? mount.get(0) : 0.0;
-                        double my = mount != null && mount.size() == 3 ? mount.get(1) : 0.0;
-                        double mz = mount != null && mount.size() == 3 ? mount.get(2) : 0.0;
+                        List<Double> pivot = turret != null ? turret.getPivotOffset() : java.util.Arrays.asList(0.0, 0.0, 0.0);
+                        double lx = rx;
+                        double ly = ry;
+                        double lz = rz;
 
-                        double lx = rx - mx;
-                        double ly = ry - my;
-                        double lz = rz - mz;
+                        if (!session.standaloneTurret) {
+                            List<Double> mount = sub.getMountOffset();
+                            double mx = mount != null && mount.size() == 3 ? mount.get(0) : 0.0;
+                            double my = mount != null && mount.size() == 3 ? mount.get(1) : 0.0;
+                            double mz = mount != null && mount.size() == 3 ? mount.get(2) : 0.0;
+
+                            lx = rx - mx;
+                            ly = ry - my;
+                            lz = rz - mz;
+                        }
 
                         lx = Math.round(lx / snap) * snap;
                         ly = Math.round(ly / snap) * snap;
                         lz = Math.round(lz / snap) * snap;
 
                         List<Double> launch = java.util.Arrays.asList(lx, ly, lz);
-                        sub.setLaunchOffset(launch);
+                        if (turret != null) {
+                            turret.setLaunchOffset(launch);
+                        }
 
                         player.sendActionBar(Component.text("§6§lMuzzle Point: §f" + String.format("%.2f, %.2f, %.2f", lx, ly, lz) + lockedStr + " §7| §aLeft Click: Save §7| §cShift+Left Click: Cancel"));
 
                         Location pPivot = ModelTransformEngine.getSubsystemComponentPosition(
                             rootLoc,
-                            mount,
+                            session.standaloneTurret ? java.util.Arrays.asList(0.0, 0.0, 0.0) : sub.getMountOffset(),
                             pivot != null ? pivot : java.util.Arrays.asList(0.0, 0.0, 0.0),
                             null,
                             scale,
@@ -3544,7 +3857,7 @@ public class ModelManager {
                         );
                         Location pMuzzle = ModelTransformEngine.getSubsystemComponentPosition(
                             rootLoc,
-                            mount,
+                            session.standaloneTurret ? java.util.Arrays.asList(0.0, 0.0, 0.0) : sub.getMountOffset(),
                             launch,
                             null,
                             scale,
@@ -3560,8 +3873,8 @@ public class ModelManager {
                             drawParticleLine(player, pPivot, pMuzzle, org.bukkit.Particle.valueOf("FLAME"));
                         } catch (Exception ignored) {}
 
-                    } else if (session.step == PlacementStep.MOUNT_POINT) {
-                        List<Double> pivot = sub.getPivotOffset();
+                    } else if (!session.standaloneTurret && session.step == PlacementStep.MOUNT_POINT) {
+                        List<Double> pivot = sub.getPivotOffset(ModelManager.this);
                         double px = pivot != null && pivot.size() == 3 ? pivot.get(0) : 0.0;
                         double py = pivot != null && pivot.size() == 3 ? pivot.get(1) : 0.0;
                         double pz = pivot != null && pivot.size() == 3 ? pivot.get(2) : 0.0;
@@ -3597,8 +3910,8 @@ public class ModelManager {
                         } catch (Exception ignored) {}
 
                     } else if (session.step == PlacementStep.CAMERA_OFFSET) {
-                        List<Double> mount = sub.getMountOffset();
-                        List<Double> pivot = sub.getPivotOffset();
+                        List<Double> mount = session.standaloneTurret ? java.util.Arrays.asList(0.0, 0.0, 0.0) : sub.getMountOffset();
+                        List<Double> pivot = turret != null ? turret.getPivotOffset() : java.util.Arrays.asList(0.0, 0.0, 0.0);
                         double mx = mount != null && mount.size() == 3 ? mount.get(0) : 0.0;
                         double my = mount != null && mount.size() == 3 ? mount.get(1) : 0.0;
                         double mz = mount != null && mount.size() == 3 ? mount.get(2) : 0.0;
@@ -3612,32 +3925,37 @@ public class ModelManager {
                         cz = Math.round(cz / snap) * snap;
 
                         List<Double> camera = java.util.Arrays.asList(cx, cy, cz);
-                        sub.setCameraOffset(camera);
+                        if (turret != null) {
+                            turret.setCameraOffset(camera);
+                        }
 
                         player.sendActionBar(Component.text("§a§lCamera View: §f" + String.format("%.2f, %.2f, %.2f", cx, cy, cz) + lockedStr + " §7| §aLeft Click: Save §7| §cShift+Left Click: Cancel"));
 
-                        Location pMount = ModelTransformEngine.getSubsystemComponentPosition(
-                            rootLoc,
-                            mount,
-                            java.util.Arrays.asList(0.0, 0.0, 0.0),
-                            model.getSeatOffset(),
-                            scale,
-                            model.getFrontYawOffset(),
-                            rootLoc.getYaw(),
-                            rootLoc.getPitch(),
-                            0.0,
-                            0.0,
-                            pivot
-                        );
+                        Location pMount = rootLoc.clone();
+                        if (!session.standaloneTurret) {
+                            pMount = ModelTransformEngine.getSubsystemComponentPosition(
+                                rootLoc,
+                                mount,
+                                java.util.Arrays.asList(0.0, 0.0, 0.0),
+                                model.getSeatOffset(),
+                                scale,
+                                model.getFrontYawOffset(),
+                                rootLoc.getYaw(),
+                                rootLoc.getPitch(),
+                                0.0,
+                                0.0,
+                                pivot
+                            );
+                        }
                         Location pCam = ModelTransformEngine.getSubsystemComponentPosition(
                             rootLoc,
                             mount,
                             camera,
-                            model.getSeatOffset(),
+                            session.standaloneTurret ? null : model.getSeatOffset(),
                             scale,
-                            model.getFrontYawOffset(),
+                            session.standaloneTurret ? 0.0 : model.getFrontYawOffset(),
                             rootLoc.getYaw(),
-                            rootLoc.getPitch(),
+                            session.standaloneTurret ? 0.0 : rootLoc.getPitch(),
                             0.0,
                             0.0,
                             pivot
@@ -3648,13 +3966,14 @@ public class ModelManager {
                         } catch (Exception ignored) {}
                     }
 
-                    if (session.step == PlacementStep.MOUNT_POINT || session.step == PlacementStep.CAMERA_OFFSET) {
+                    if (!session.standaloneTurret && (session.step == PlacementStep.MOUNT_POINT || session.step == PlacementStep.CAMERA_OFFSET)) {
                         ModelInstance instance = activeInstances.get(session.instanceId);
                         if (instance != null) {
                             List<Display> subDisplays = new ArrayList<>();
                             int subIdx = model.getVehicle().getSubsystems().indexOf(sub);
                             for (Display display : instance.getPassengers()) {
-                                if (sub.getDisplayTag() != null && !sub.getDisplayTag().isEmpty() && display.getScoreboardTags().contains(sub.getDisplayTag())) {
+                                String subDisplayTag = sub.getDisplayTag(ModelManager.this);
+                                if (subDisplayTag != null && !subDisplayTag.isEmpty() && display.getScoreboardTags().contains(subDisplayTag)) {
                                     subDisplays.add(display);
                                 } else if (display.hasMetadata("bde_subsystem_parent_index") &&
                                            display.getMetadata("bde_subsystem_parent_index").get(0).asInt() == subIdx) {
@@ -3670,6 +3989,7 @@ public class ModelManager {
                         ModelInstance tempSub = session.tempSubsystemInstanceId != null ? activeInstances.get(session.tempSubsystemInstanceId) : null;
                         if (tempSub != null && tempSub.getVehicleRoot() != null) {
                             tempSub.getVehicleRoot().teleport(session.subsystemOriginWorldLoc);
+                            updateModelTransforms(tempSub);
                         }
                     }
                 }

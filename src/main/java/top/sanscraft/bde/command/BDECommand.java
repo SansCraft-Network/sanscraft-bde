@@ -23,6 +23,7 @@ import top.sanscraft.bde.manager.CustomBlockManager;
 import top.sanscraft.bde.manager.ModelManager;
 import top.sanscraft.bde.model.BdeModel;
 import top.sanscraft.bde.model.ModelInstance;
+import top.sanscraft.bde.model.TurretConfig;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -56,6 +57,12 @@ public class BDECommand implements CommandExecutor, TabCompleter {
                 break;
             case "vehicles":
                 handleVehiclesCatalog(sender);
+                break;
+            case "turrets":
+                handleTurretsCatalog(sender);
+                break;
+            case "projectiles":
+                handleProjectilesCatalog(sender);
                 break;
             case "move":
                 handleMove(sender, args);
@@ -91,6 +98,12 @@ public class BDECommand implements CommandExecutor, TabCompleter {
                 break;
             case "traction":
                 handleTraction(sender);
+                break;
+            case "turret":
+                handleTurret(sender, args);
+                break;
+            case "projectile":
+                handleProjectile(sender, args);
                 break;
             case "debug":
                 handleDebug(sender, args);
@@ -236,6 +249,24 @@ public class BDECommand implements CommandExecutor, TabCompleter {
         }
         Player player = (Player) sender;
         plugin.getBdeGuiManager().openVehiclesCatalog(player, null);
+    }
+
+    private void handleTurretsCatalog(CommandSender sender) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(ChatColor.RED + "Only players can run this subcommand.");
+            return;
+        }
+        Player player = (Player) sender;
+        plugin.getBdeGuiManager().openTurretCatalog(player);
+    }
+
+    private void handleProjectilesCatalog(CommandSender sender) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(ChatColor.RED + "Only players can run this subcommand.");
+            return;
+        }
+        Player player = (Player) sender;
+        plugin.getBdeGuiManager().openProjectileCatalog(player);
     }
 
     private void handleMove(CommandSender sender, String[] args) {
@@ -738,6 +769,8 @@ public class BDECommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(ChatColor.YELLOW + "/bde anim <play|stop|pause|resume|speed> ... §7- Animates model");
         sender.sendMessage(ChatColor.YELLOW + "/bde convert <blockbench|vox|gltf|glb|obj> <file> [resolution] §7- Converts 3D model");
         sender.sendMessage(ChatColor.YELLOW + "/bde vehicles §7- Opens the vehicles catalog GUI");
+        sender.sendMessage(ChatColor.YELLOW + "/bde turrets §7- Opens the turrets catalog GUI");
+        sender.sendMessage(ChatColor.YELLOW + "/bde projectiles §7- Opens the projectiles catalog GUI");
         sender.sendMessage(ChatColor.YELLOW + "/bde block give <player> <block_id> [amount] §7- Gives custom block item");
         sender.sendMessage(ChatColor.YELLOW + "/bde block link <custom_block_id> §7- Links hand-held item stack");
         sender.sendMessage(ChatColor.YELLOW + "/bde select §7- Selects nearest model and shows highlights");
@@ -745,12 +778,14 @@ public class BDECommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(ChatColor.YELLOW + "/bde rotate <angle> §7- Rotates model by yaw degrees");
         sender.sendMessage(ChatColor.YELLOW + "/bde gui §7- Opens the GUI editor console for selected model");
         sender.sendMessage(ChatColor.YELLOW + "/bde traction §7- Opens the global block traction overrides GUI");
+        sender.sendMessage(ChatColor.YELLOW + "/bde turret <list|load|create|edit|save|gui> ... §7- Manage turret templates");
+        sender.sendMessage(ChatColor.YELLOW + "/bde projectile <list|load|create|edit|save|gui> ... §7- Manage projectile templates");
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-            return filter(Arrays.asList("spawn", "remove", "list", "anim", "convert", "block", "select", "deselect", "clear", "rotate", "gui", "move", "vehicles", "debug", "traction", "test_transform"), args[0]);
+            return filter(Arrays.asList("spawn", "remove", "list", "anim", "convert", "block", "select", "deselect", "clear", "rotate", "gui", "move", "vehicles", "turrets", "projectiles", "debug", "traction", "test_transform", "turret", "projectile"), args[0]);
         }
 
         String subcommand = args[0].toLowerCase();
@@ -788,9 +823,19 @@ public class BDECommand implements CommandExecutor, TabCompleter {
             if (subcommand.equals("debug")) {
                 return filter(Arrays.asList("vehicles"), args[1]);
             }
+            if (subcommand.equals("turret") || subcommand.equals("projectile")) {
+                return filter(Arrays.asList("list", "load", "create", "edit", "save", "gui"), args[1]);
+            }
         }
 
         if (args.length == 3) {
+            if (subcommand.equals("turret") && Arrays.asList("load", "edit", "save").contains(args[1].toLowerCase())) {
+                return filter(new ArrayList<>(plugin.getModelManager().getAvailableTurretIds()), args[2]);
+            }
+            if (subcommand.equals("projectile") && Arrays.asList("load", "edit", "save").contains(args[1].toLowerCase())) {
+                return filter(new ArrayList<>(plugin.getModelManager().getAvailableProjectileIds()), args[2]);
+            }
+
 
             if (subcommand.equals("convert")) {
                 File folder = new File(plugin.getDataFolder(), "models");
@@ -847,6 +892,12 @@ public class BDECommand implements CommandExecutor, TabCompleter {
             }
             if (subcommand.equals("move")) {
                 return Collections.singletonList("~");
+            }
+            if (subcommand.equals("turret") && args[1].equalsIgnoreCase("edit")) {
+                return filter(Arrays.asList("name", "bdemodelid", "projectileids", "displaytag", "minyaw", "maxyaw", "minpitch", "maxpitch", "pivot", "launch", "camera"), args[3]);
+            }
+            if (subcommand.equals("projectile") && args[1].equalsIgnoreCase("edit")) {
+                return filter(Arrays.asList("name", "damage", "speed", "cooldown", "hasgravity", "onhit", "explosionpower", "destroyblocks", "vanillaexplosiondamage", "lockon", "lockrange", "lockangle", "locktime", "bdemodelid", "launchsound", "flyparticle", "impactparticle", "basepoint", "directionvector"), args[3]);
             }
         }
 
@@ -1227,6 +1278,368 @@ public class BDECommand implements CommandExecutor, TabCompleter {
 
     private String fmt(Location loc) {
         return String.format("%.4f, %.4f, %.4f", loc.getX(), loc.getY(), loc.getZ());
+    }
+
+    private void handleTurret(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§cUsage: /bde turret <list|load|create|edit|save|gui> ...");
+            return;
+        }
+        String action = args[1].toLowerCase();
+        ModelManager mm = plugin.getModelManager();
+        switch (action) {
+            case "gui":
+                handleTurretsCatalog(sender);
+                break;
+            case "list":
+                sender.sendMessage("§6=== Turret Templates ===");
+                for (String id : mm.getAvailableTurretIds()) {
+                    TurretConfig tc = mm.getTurretTemplate(id);
+                    sender.sendMessage("§e- §f" + id + " §7(" + (tc != null ? tc.getName() : "null") + ")");
+                }
+                break;
+            case "load":
+                if (args.length < 3) {
+                    sender.sendMessage("§cUsage: /bde turret load <id>");
+                    return;
+                }
+                String loadId = args[2].toLowerCase();
+                try {
+                    TurretConfig loaded = mm.loadTurretConfigSync(loadId);
+                    sender.sendMessage("§aLoaded turret: §b" + loadId);
+                    sendTurretDetails(sender, loaded);
+                } catch (Exception e) {
+                    sender.sendMessage("§cFailed to load turret template: " + e.getMessage());
+                }
+                break;
+            case "create":
+                if (args.length < 3) {
+                    sender.sendMessage("§cUsage: /bde turret create <id> [bde_model_id]");
+                    return;
+                }
+                String createId = args[2].toLowerCase();
+                String bdeModelId = args.length >= 4 ? args[3] : "default_turret";
+                if (mm.getTurretTemplate(createId) != null) {
+                    sender.sendMessage("§cTurret template already exists with ID: " + createId);
+                    return;
+                }
+                
+                String defaultProjId = createId + "_primary";
+                BdeModel.ProjectileConfig pc = new BdeModel.ProjectileConfig();
+                pc.setName(defaultProjId);
+                mm.saveProjectileConfig(defaultProjId, pc);
+
+                TurretConfig tc = new TurretConfig();
+                tc.setId(createId);
+                tc.setName(createId);
+                tc.setBdeModelId(bdeModelId);
+                tc.setProjectileIds(new ArrayList<>(Arrays.asList(defaultProjId)));
+                tc.setPivotOffset(new ArrayList<>(Arrays.asList(0.0, 0.0, 0.0)));
+                tc.setLaunchOffset(new ArrayList<>(Arrays.asList(0.0, 0.0, 0.0)));
+                tc.setCameraOffset(new ArrayList<>(Arrays.asList(0.0, 0.0, 0.0)));
+                tc.setFovMinYaw(-180.0);
+                tc.setFovMaxYaw(180.0);
+                tc.setFovMinPitch(-45.0);
+                tc.setFovMaxPitch(45.0);
+
+                try {
+                    mm.saveTurretConfig(tc);
+                    sender.sendMessage("§aCreated new turret template: §b" + createId + " §awith projectile: §b" + defaultProjId);
+                } catch (Exception e) {
+                    sender.sendMessage("§cFailed to save turret config: " + e.getMessage());
+                }
+                break;
+            case "edit":
+                if (args.length < 5) {
+                    sender.sendMessage("§cUsage: /bde turret edit <id> <field> <value...>");
+                    sender.sendMessage("§7Fields: name, bdemodelid, projectileids, displaytag, minyaw, maxyaw, minpitch, maxpitch, pivot, launch, camera");
+                    return;
+                }
+                String editId = args[2].toLowerCase();
+                TurretConfig editTc = mm.getTurretTemplate(editId);
+                if (editTc == null) {
+                    sender.sendMessage("§cTurret template not found: " + editId);
+                    return;
+                }
+                String field = args[3].toLowerCase();
+                String value = Arrays.stream(args).skip(4).collect(Collectors.joining(" "));
+                try {
+                    switch (field) {
+                        case "name":
+                            editTc.setName(value);
+                            break;
+                        case "bdemodelid":
+                            editTc.setBdeModelId(value);
+                            break;
+                        case "projectileids":
+                            editTc.setProjectileIds(new ArrayList<>(Arrays.stream(value.split(",")).map(String::trim).collect(Collectors.toList())));
+                            break;
+                        case "displaytag":
+                            editTc.setDisplayTag(value);
+                            break;
+                        case "minyaw":
+                            editTc.setFovMinYaw(Double.parseDouble(value));
+                            break;
+                        case "maxyaw":
+                            editTc.setFovMaxYaw(Double.parseDouble(value));
+                            break;
+                        case "minpitch":
+                            editTc.setFovMinPitch(Double.parseDouble(value));
+                            break;
+                        case "maxpitch":
+                            editTc.setFovMaxPitch(Double.parseDouble(value));
+                            break;
+                        case "pivot":
+                            editTc.setPivotOffset(parseCoords(value));
+                            break;
+                        case "launch":
+                            editTc.setLaunchOffset(parseCoords(value));
+                            break;
+                        case "camera":
+                            editTc.setCameraOffset(parseCoords(value));
+                            break;
+                        default:
+                            sender.sendMessage("§cUnknown field: " + field);
+                            return;
+                    }
+                    mm.saveTurretConfig(editTc);
+                    sender.sendMessage("§aUpdated field §b" + field + " §ato §f" + value + " §afor turret §b" + editId);
+                } catch (Exception e) {
+                    sender.sendMessage("§cFailed to edit field: " + e.getMessage());
+                }
+                break;
+            case "save":
+                if (args.length < 3) {
+                    sender.sendMessage("§cUsage: /bde turret save <id>");
+                    return;
+                }
+                String saveId = args[2].toLowerCase();
+                TurretConfig saveTc = mm.getTurretTemplate(saveId);
+                if (saveTc == null) {
+                    sender.sendMessage("§cTurret template not found: " + saveId);
+                    return;
+                }
+                try {
+                    mm.saveTurretConfig(saveTc);
+                    sender.sendMessage("§aExplicitly saved turret config: §b" + saveId);
+                } catch (Exception e) {
+                    sender.sendMessage("§cFailed to save: " + e.getMessage());
+                }
+                break;
+            default:
+                sender.sendMessage("§cUnknown action: " + action);
+                break;
+        }
+    }
+
+    private void sendTurretDetails(CommandSender sender, TurretConfig tc) {
+        if (tc == null) return;
+        sender.sendMessage("§eName: §f" + tc.getName());
+        sender.sendMessage("§eBDE Model ID: §f" + tc.getBdeModelId());
+        sender.sendMessage("§eProjectile IDs: §f" + String.join(", ", tc.getProjectileIds()));
+        sender.sendMessage("§eDisplay Tag: §f" + tc.getDisplayTag());
+        sender.sendMessage("§eFOV Yaw: §f" + tc.getFovMinYaw() + " to " + tc.getFovMaxYaw());
+        sender.sendMessage("§eFOV Pitch: §f" + tc.getFovMinPitch() + " to " + tc.getFovMaxPitch());
+        sender.sendMessage("§ePivot Offset: §f" + tc.getPivotOffset());
+        sender.sendMessage("§eLaunch Offset: §f" + tc.getLaunchOffset());
+        sender.sendMessage("§eCamera Offset: §f" + tc.getCameraOffset());
+    }
+
+    private void handleProjectile(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§cUsage: /bde projectile <list|load|create|edit|save|gui> ...");
+            return;
+        }
+        String action = args[1].toLowerCase();
+        ModelManager mm = plugin.getModelManager();
+        switch (action) {
+            case "gui":
+                handleProjectilesCatalog(sender);
+                break;
+            case "list":
+                sender.sendMessage("§6=== Projectile Templates ===");
+                for (String id : mm.getAvailableProjectileIds()) {
+                    BdeModel.ProjectileConfig pc = mm.getProjectileConfig(id);
+                    sender.sendMessage("§e- §f" + id + " §7(" + (pc != null ? pc.getName() : "null") + ")");
+                }
+                break;
+            case "load":
+                if (args.length < 3) {
+                    sender.sendMessage("§cUsage: /bde projectile load <id>");
+                    return;
+                }
+                String loadId = args[2].toLowerCase();
+                try {
+                    BdeModel.ProjectileConfig loaded = mm.loadProjectileConfigSync(loadId);
+                    sender.sendMessage("§aLoaded projectile: §b" + loadId);
+                    sendProjectileDetails(sender, loaded);
+                } catch (Exception e) {
+                    sender.sendMessage("§cFailed to load projectile: " + e.getMessage());
+                }
+                break;
+            case "create":
+                if (args.length < 3) {
+                    sender.sendMessage("§cUsage: /bde projectile create <id> [name]");
+                    return;
+                }
+                String createId = args[2].toLowerCase();
+                String name = args.length >= 4 ? args[3] : createId;
+                if (mm.getProjectileConfig(createId) != null) {
+                    sender.sendMessage("§cProjectile already exists with ID: " + createId);
+                    return;
+                }
+                BdeModel.ProjectileConfig pc = new BdeModel.ProjectileConfig();
+                pc.setName(name);
+                try {
+                    mm.saveProjectileConfig(createId, pc);
+                    sender.sendMessage("§aCreated new projectile template: §b" + createId);
+                } catch (Exception e) {
+                    sender.sendMessage("§cFailed to save projectile: " + e.getMessage());
+                }
+                break;
+            case "edit":
+                if (args.length < 5) {
+                    sender.sendMessage("§cUsage: /bde projectile edit <id> <field> <value...>");
+                    sender.sendMessage("§7Fields: name, damage, speed, cooldown, hasgravity, onhit, explosionpower, destroyblocks, vanillaexplosiondamage, lockon, lockrange, lockangle, locktime, bdemodelid, launchsound, flyparticle, impactparticle");
+                    return;
+                }
+                String editId = args[2].toLowerCase();
+                BdeModel.ProjectileConfig editPc = mm.getProjectileConfig(editId);
+                if (editPc == null) {
+                    sender.sendMessage("§cProjectile template not found: " + editId);
+                    return;
+                }
+                String field = args[3].toLowerCase();
+                String value = Arrays.stream(args).skip(4).collect(Collectors.joining(" "));
+                try {
+                    switch (field) {
+                        case "name":
+                            editPc.setName(value);
+                            break;
+                        case "damage":
+                            editPc.setDamage(Double.parseDouble(value));
+                            break;
+                        case "speed":
+                            editPc.setSpeed(Double.parseDouble(value));
+                            break;
+                        case "cooldown":
+                            editPc.setCooldown(Double.parseDouble(value));
+                            break;
+                        case "hasgravity":
+                            editPc.setHasGravity(Boolean.parseBoolean(value));
+                            break;
+                        case "onhit":
+                            editPc.setOnHit(value);
+                            break;
+                        case "explosionpower":
+                            editPc.setExplosionPower(Double.parseDouble(value));
+                            break;
+                        case "destroyblocks":
+                            editPc.setDestroyBlocks(Boolean.parseBoolean(value));
+                            break;
+                        case "vanillaexplosiondamage":
+                            editPc.setVanillaExplosionDamage(Boolean.parseBoolean(value));
+                            break;
+                        case "lockon":
+                            editPc.setLockOn(Boolean.parseBoolean(value));
+                            break;
+                        case "lockrange":
+                            editPc.setLockRange(Double.parseDouble(value));
+                            break;
+                        case "lockangle":
+                            editPc.setLockAngle(Double.parseDouble(value));
+                            break;
+                        case "locktime":
+                            editPc.setLockTime(Double.parseDouble(value));
+                            break;
+                        case "bdemodelid":
+                            editPc.setBdeModelId(value);
+                            break;
+                        case "launchsound":
+                            editPc.setLaunchSound(value);
+                            break;
+                        case "flyparticle":
+                            editPc.setFlyParticle(value);
+                            break;
+                        case "impactparticle":
+                            editPc.setImpactParticle(value);
+                            break;
+                        case "basepoint":
+                            editPc.setBasePoint(parseCoords(value));
+                            break;
+                        case "directionvector":
+                            editPc.setDirectionVector(parseCoords(value));
+                            break;
+                        default:
+                            sender.sendMessage("§cUnknown field: " + field);
+                            return;
+                    }
+                    mm.saveProjectileConfig(editId, editPc);
+                    sender.sendMessage("§aUpdated field §b" + field + " §ato §f" + value + " §afor projectile §b" + editId);
+                } catch (Exception e) {
+                    sender.sendMessage("§cFailed to edit field: " + e.getMessage());
+                }
+                break;
+            case "save":
+                if (args.length < 3) {
+                    sender.sendMessage("§cUsage: /bde projectile save <id>");
+                    return;
+                }
+                String saveId = args[2].toLowerCase();
+                BdeModel.ProjectileConfig savePc = mm.getProjectileConfig(saveId);
+                if (savePc == null) {
+                    sender.sendMessage("§cProjectile template not found: " + saveId);
+                    return;
+                }
+                try {
+                    mm.saveProjectileConfig(saveId, savePc);
+                    sender.sendMessage("§aExplicitly saved projectile: §b" + saveId);
+                } catch (Exception e) {
+                    sender.sendMessage("§cFailed to save: " + e.getMessage());
+                }
+                break;
+            default:
+                sender.sendMessage("§cUnknown action: " + action);
+                break;
+        }
+    }
+
+    private void sendProjectileDetails(CommandSender sender, BdeModel.ProjectileConfig pc) {
+        if (pc == null) return;
+        sender.sendMessage("§eName: §f" + pc.getName());
+        sender.sendMessage("§eDamage: §f" + pc.getDamage());
+        sender.sendMessage("§eSpeed: §f" + pc.getSpeed());
+        sender.sendMessage("§eCooldown: §f" + pc.getCooldown());
+        sender.sendMessage("§eHas Gravity: §f" + pc.isHasGravity());
+        sender.sendMessage("§eOn Hit: §f" + pc.getOnHit());
+        sender.sendMessage("§eExplosion Power: §f" + pc.getExplosionPower());
+        sender.sendMessage("§eDestroy Blocks: §f" + pc.isDestroyBlocks());
+        sender.sendMessage("§eVanilla Explosion Damage: §f" + pc.isVanillaExplosionDamage());
+        sender.sendMessage("§eLock On: §f" + pc.isLockOn());
+        sender.sendMessage("§eLock Range: §f" + pc.getLockRange());
+        sender.sendMessage("§eLock Angle: §f" + pc.getLockAngle());
+        sender.sendMessage("§eLock Time: §f" + pc.getLockTime());
+        sender.sendMessage("§eBDE Model ID: §f" + pc.getBdeModelId());
+        sender.sendMessage("§eLaunch Sound: §f" + pc.getLaunchSound());
+        sender.sendMessage("§eFly Particle: §f" + pc.getFlyParticle());
+        sender.sendMessage("§eImpact Particle: §f" + pc.getImpactParticle());
+        sender.sendMessage("§eBase Point: §f" + pc.getBasePoint());
+        sender.sendMessage("§eDirection Vector: §f" + pc.getDirectionVector());
+    }
+
+    private List<Double> parseCoords(String text) throws IllegalArgumentException {
+        String[] parts = text.split(",");
+        if (parts.length != 3) {
+            throw new IllegalArgumentException("Coordinates must be formatted as: X, Y, Z");
+        }
+        try {
+            double x = Double.parseDouble(parts[0].trim());
+            double y = Double.parseDouble(parts[1].trim());
+            double z = Double.parseDouble(parts[2].trim());
+            return java.util.Arrays.asList(x, y, z);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Coordinate values must be valid decimals.");
+        }
     }
 
     private void collectFiles(File dir, String currentPath, List<String> list) {

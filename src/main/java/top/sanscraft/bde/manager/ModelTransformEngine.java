@@ -230,7 +230,7 @@ public class ModelTransformEngine {
 
         // 5. Rotate by subsystem relative aiming yaw and pitch
         mPass.rotateY((float) Math.toRadians(-relativeYaw));
-        mPass.rotateX((float) Math.toRadians(relativePitch));
+        mPass.rotateX((float) Math.toRadians(-relativePitch));
 
         // 6. Translate back by pivot offset
         if (hasPivot) {
@@ -300,7 +300,7 @@ public class ModelTransformEngine {
 
         // 4. Rotate by subsystem relative aiming angles
         mPass.rotateY((float) Math.toRadians(-relativeYaw));
-        mPass.rotateX((float) Math.toRadians(relativePitch));
+        mPass.rotateX((float) Math.toRadians(-relativePitch));
 
         // 5. Translate back by pivot offset
         if (hasPivot) {

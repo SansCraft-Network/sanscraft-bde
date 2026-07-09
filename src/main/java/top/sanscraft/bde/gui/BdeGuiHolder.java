@@ -78,6 +78,25 @@ public class BdeGuiHolder implements InventoryHolder {
         return modelProjectId;
     }
 
+    private String turretId;
+    private String projectileId;
+
+    public String getTurretId() {
+        return turretId;
+    }
+
+    public void setTurretId(String turretId) {
+        this.turretId = turretId;
+    }
+
+    public String getProjectileId() {
+        return projectileId;
+    }
+
+    public void setProjectileId(String projectileId) {
+        this.projectileId = projectileId;
+    }
+
     public int getPage() {
         return page;
     }
@@ -107,6 +126,13 @@ public class BdeGuiHolder implements InventoryHolder {
         SUBSYSTEM_LIST,
         SUBSYSTEM_DETAIL,
         WEAPON_MODE_LIST,
-        WEAPON_MODE_DETAIL
+        WEAPON_MODE_DETAIL,
+        TURRET_LINK_MENU,
+        TURRET_CATALOG,
+        TURRET_EDITOR,
+        TURRET_PROJECTILE_LINK,
+        PROJECTILE_CATALOG,
+        PROJECTILE_EDITOR,
+        SUBSYSTEM_PROJECTILE_OVERRIDE
     }
 }

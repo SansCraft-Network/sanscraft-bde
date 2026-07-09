@@ -19,6 +19,7 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 import top.sanscraft.bde.SansCraftBDEPlugin;
 import top.sanscraft.bde.converter.BlockbenchConverter;
 import top.sanscraft.bde.converter.ConversionMapper;
@@ -27,6 +28,10 @@ import top.sanscraft.bde.gui.BdeGuiHolder;
 import top.sanscraft.bde.manager.CustomBlockManager;
 import top.sanscraft.bde.model.BdeModel;
 import top.sanscraft.bde.model.ModelInstance;
+import top.sanscraft.bde.model.TurretConfig;
+import top.sanscraft.bde.manager.ModelManager;
+import java.util.ArrayList;
+import java.util.Arrays;
 
 import org.bukkit.entity.Entity;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
@@ -66,7 +71,20 @@ public class BdeGuiListener implements Listener {
         EDIT_SUBSYSTEM_MIN_PITCH,
         EDIT_SUBSYSTEM_MAX_PITCH,
         EDIT_SUBSYSTEM_CAMERA_OFFSET,
-        EDIT_SUBSYSTEM_PIVOT_OFFSET
+        EDIT_SUBSYSTEM_PIVOT_OFFSET,
+        EXPORT_TURRET_TEMPLATE,
+        CREATE_TURRET,
+        RENAME_TURRET,
+        EDIT_TURRET_MODEL_ID,
+        EDIT_TURRET_DISPLAY_TAG,
+        CREATE_PROJECTILE,
+        RENAME_PROJECTILE,
+        EDIT_PROJECTILE_MODEL_ID,
+        EDIT_PROJECTILE_LAUNCH_SOUND,
+        EDIT_PROJECTILE_FLY_PARTICLE,
+        EDIT_PROJECTILE_IMPACT_PARTICLE,
+        EDIT_PROJECTILE_BASE_POINT,
+        EDIT_PROJECTILE_DIRECTION_VECTOR
     }
 
     public static class ChatPromptState {
@@ -75,17 +93,29 @@ public class BdeGuiListener implements Listener {
         public final UUID instanceId;
         public final Integer seatIndex;
         public final String blockMaterial;
+        public final String turretId;
+        public final String projectileId;
 
         public ChatPromptState(ChatPromptType type, String modelProjectId, UUID instanceId, Integer seatIndex) {
-            this(type, modelProjectId, instanceId, seatIndex, null);
+            this(type, modelProjectId, instanceId, seatIndex, null, null, null);
         }
 
         public ChatPromptState(ChatPromptType type, String modelProjectId, UUID instanceId, Integer seatIndex, String blockMaterial) {
+            this(type, modelProjectId, instanceId, seatIndex, blockMaterial, null, null);
+        }
+
+        public ChatPromptState(ChatPromptType type, String turretId, String projectileId) {
+            this(type, null, null, null, null, turretId, projectileId);
+        }
+
+        public ChatPromptState(ChatPromptType type, String modelProjectId, UUID instanceId, Integer seatIndex, String blockMaterial, String turretId, String projectileId) {
             this.type = type;
             this.modelProjectId = modelProjectId;
             this.instanceId = instanceId;
             this.seatIndex = seatIndex;
             this.blockMaterial = blockMaterial;
+            this.turretId = turretId;
+            this.projectileId = projectileId;
         }
     }
 
@@ -238,6 +268,27 @@ public class BdeGuiListener implements Listener {
                 break;
             case WEAPON_MODE_DETAIL:
                 handleWeaponModeDetailClick(player, instance, holder, event.getSlot(), clickedItem, event);
+                break;
+            case TURRET_LINK_MENU:
+                handleTurretLinkMenuClick(player, instance, holder, event.getSlot(), clickedItem, event);
+                break;
+            case TURRET_CATALOG:
+                handleTurretCatalogClick(player, holder, event.getSlot(), clickedItem, event);
+                break;
+            case TURRET_EDITOR:
+                handleTurretEditorClick(player, holder, event.getSlot(), clickedItem, event);
+                break;
+            case TURRET_PROJECTILE_LINK:
+                handleTurretProjectileLinkClick(player, holder, event.getSlot(), clickedItem, event);
+                break;
+            case PROJECTILE_CATALOG:
+                handleProjectileCatalogClick(player, holder, event.getSlot(), clickedItem, event);
+                break;
+            case PROJECTILE_EDITOR:
+                handleProjectileEditorClick(player, holder, event.getSlot(), clickedItem, event);
+                break;
+            case SUBSYSTEM_PROJECTILE_OVERRIDE:
+                handleSubsystemProjectileOverrideClick(player, instance, holder, event.getSlot(), clickedItem, event);
                 break;
         }
     }
@@ -1400,6 +1451,102 @@ public class BdeGuiListener implements Listener {
                 }
                 break;
 
+            case EXPORT_TURRET_TEMPLATE:
+                if (state.modelProjectId != null && state.blockMaterial != null) {
+                    int subIdx = Integer.parseInt(state.blockMaterial);
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        try {
+                            BdeModel vehicleModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
+                            if (vehicleModel != null && vehicleModel.getVehicle() != null) {
+                                BdeModel.SubsystemConfig subConfig = vehicleModel.getVehicle().getSubsystems().get(subIdx);
+                                
+                                String newTurretId = text.toLowerCase().replaceAll("[^a-z0-9_-]", "");
+                                if (newTurretId.isEmpty()) {
+                                    player.sendMessage("§cInvalid turret template ID.");
+                                    return;
+                                }
+                                
+                                ModelManager mm = plugin.getModelManager();
+                                String existingTurretId = subConfig.getTurretId();
+                                TurretConfig tc;
+                                if (existingTurretId != null && !existingTurretId.isEmpty()) {
+                                    TurretConfig existing = mm.getTurretTemplate(existingTurretId);
+                                    if (existing != null) {
+                                        // clone it
+                                        tc = new TurretConfig();
+                                        tc.setName(existing.getName());
+                                        tc.setBdeModelId(existing.getBdeModelId());
+                                        tc.setProjectileIds(new ArrayList<>(existing.getProjectileIds()));
+                                        tc.setPivotOffset(new ArrayList<>(existing.getPivotOffset()));
+                                        tc.setLaunchOffset(new ArrayList<>(existing.getLaunchOffset()));
+                                        tc.setCameraOffset(new ArrayList<>(existing.getCameraOffset()));
+                                        tc.setFovMinYaw(existing.getFovMinYaw());
+                                        tc.setFovMaxYaw(existing.getFovMaxYaw());
+                                        tc.setFovMinPitch(existing.getFovMinPitch());
+                                        tc.setFovMaxPitch(existing.getFovMaxPitch());
+                                        tc.setDisplayTag(existing.getDisplayTag());
+                                    } else {
+                                        tc = new TurretConfig();
+                                        String defaultProjId = newTurretId + "_primary";
+                                        BdeModel.ProjectileConfig pc = new BdeModel.ProjectileConfig();
+                                        pc.setName(defaultProjId);
+                                        mm.saveProjectileConfig(defaultProjId, pc);
+
+                                        tc.setName(subConfig.getName());
+                                        tc.setBdeModelId("default_turret");
+                                        tc.setProjectileIds(new ArrayList<>(Arrays.asList(defaultProjId)));
+                                        tc.setPivotOffset(new ArrayList<>(Arrays.asList(0.0, 0.0, 0.0)));
+                                        tc.setLaunchOffset(new ArrayList<>(Arrays.asList(0.0, 0.0, 0.0)));
+                                        tc.setCameraOffset(new ArrayList<>(Arrays.asList(0.0, 0.0, 0.0)));
+                                        tc.setFovMinYaw(-180.0);
+                                        tc.setFovMaxYaw(180.0);
+                                        tc.setFovMinPitch(-45.0);
+                                        tc.setFovMaxPitch(45.0);
+                                    }
+                                } else {
+                                    tc = new TurretConfig();
+                                    String defaultProjId = newTurretId + "_primary";
+                                    BdeModel.ProjectileConfig pc = new BdeModel.ProjectileConfig();
+                                    pc.setName(defaultProjId);
+                                    mm.saveProjectileConfig(defaultProjId, pc);
+
+                                    tc.setName(subConfig.getName());
+                                    tc.setBdeModelId("default_turret");
+                                    tc.setProjectileIds(new ArrayList<>(Arrays.asList(defaultProjId)));
+                                    tc.setPivotOffset(new ArrayList<>(Arrays.asList(0.0, 0.0, 0.0)));
+                                    tc.setLaunchOffset(new ArrayList<>(Arrays.asList(0.0, 0.0, 0.0)));
+                                    tc.setCameraOffset(new ArrayList<>(Arrays.asList(0.0, 0.0, 0.0)));
+                                    tc.setFovMinYaw(-180.0);
+                                    tc.setFovMaxYaw(180.0);
+                                    tc.setFovMinPitch(-45.0);
+                                    tc.setFovMaxPitch(45.0);
+                                }
+                                tc.setId(newTurretId);
+                                mm.saveTurretConfig(tc);
+
+                                // Link to vehicle subsystem
+                                subConfig.setTurretId(newTurretId);
+                                if (vehicleModel.getLocalFilePath() != null && vehicleModel.isVehicleLibrary()) {
+                                    mm.saveModelConfig(vehicleModel);
+                                }
+
+                                player.sendMessage("§aTurret template §b" + newTurretId + " §acreated and linked successfully!");
+
+                                Bukkit.getScheduler().runTask(plugin, () -> {
+                                    ModelInstance inst = state.instanceId != null ? mm.getActiveInstances().get(state.instanceId) : null;
+                                    recreateModelInstance(inst, player);
+                                    UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
+                                    ModelInstance newInst = mm.getActiveInstances().get(selectedId);
+                                    plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, vehicleModel, state.modelProjectId, subIdx);
+                                });
+                            }
+                        } catch (Exception ex) {
+                            player.sendMessage("§cFailed to export turret template: " + ex.getMessage());
+                        }
+                    });
+                }
+                break;
+
             case RENAME_SUBSYSTEM:
                 if (state.modelProjectId != null && state.blockMaterial != null) {
                     int subIdx = Integer.parseInt(state.blockMaterial);
@@ -1427,66 +1574,7 @@ public class BdeGuiListener implements Listener {
                 }
                 break;
 
-            case EDIT_SUBSYSTEM_TAG:
-                if (state.modelProjectId != null && state.blockMaterial != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                m.getVehicle().getSubsystems().get(subIdx).setDisplayTag(text);
-                                if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                    plugin.getModelManager().saveModelConfig(m);
-                                }
-                                player.sendMessage("§aSubsystem display tag set to " + text);
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    plugin.getBdeGuiManager().openSubsystemDetailMenu(player, inst, updatedModel, state.modelProjectId, subIdx);
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set display tag: " + ex.getMessage());
-                        }
-                    });
-                }
-                break;
 
-            case EDIT_SUBSYSTEM_BDE_MODEL_ID:
-                if (state.modelProjectId != null && state.blockMaterial != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                m.getVehicle().getSubsystems().get(subIdx).setBdeModelId(text);
-                                if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                    plugin.getModelManager().saveModelConfig(m);
-                                }
-                                player.sendMessage("§aSubsystem mounted BDE Model ID set to " + text);
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    if (inst != null) {
-                                        recreateModelInstance(inst, player);
-                                        UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
-                                        ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, updatedModel, state.modelProjectId, subIdx);
-                                    } else {
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, null, updatedModel, state.modelProjectId, subIdx);
-                                    }
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set model ID: " + ex.getMessage());
-                        }
-                    });
-                }
-                break;
 
             case EDIT_SUBSYSTEM_MOUNT_OFFSET:
                 if (state.modelProjectId != null && state.blockMaterial != null) {
@@ -1530,463 +1618,215 @@ public class BdeGuiListener implements Listener {
                 }
                 break;
 
-            case EDIT_SUBSYSTEM_LAUNCH_OFFSET:
-                if (state.modelProjectId != null && state.blockMaterial != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    List<Double> coords;
+            case CREATE_TURRET:
+                if (text.isEmpty() || text.contains("..") || text.startsWith("/")) {
+                    player.sendMessage("§cInvalid turret ID.");
+                    reopenMenu(player, state);
+                    break;
+                }
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                     try {
-                        coords = parseCoords(text);
+                        String cleanId = text.replaceAll("[^a-zA-Z0-9_-]", "").toLowerCase();
+                        if (cleanId.isEmpty()) {
+                            player.sendMessage("§cInvalid turret ID.");
+                            Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
+                            return;
+                        }
+                        TurretConfig tc = new TurretConfig();
+                        tc.setId(cleanId);
+                        tc.setName(text);
+                        plugin.getModelManager().saveTurretConfig(tc);
+                        player.sendMessage("§aTurret template created: " + cleanId);
+                        Bukkit.getScheduler().runTask(plugin, () -> {
+                            plugin.getBdeGuiManager().openTurretEditor(player, cleanId);
+                        });
+                    } catch (Exception ex) {
+                        player.sendMessage("§cFailed to create turret: " + ex.getMessage());
+                        Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
+                    }
+                });
+                break;
+
+            case RENAME_TURRET:
+                if (state.turretId != null) {
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        TurretConfig tc = plugin.getModelManager().getTurretTemplate(state.turretId);
+                        if (tc != null) {
+                            tc.setName(text);
+                            plugin.getModelManager().saveTurretConfig(tc);
+                            player.sendMessage("§aTurret name updated to " + text);
+                        }
+                        Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
+                    });
+                }
+                break;
+
+            case EDIT_TURRET_MODEL_ID:
+                if (state.turretId != null) {
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        TurretConfig tc = plugin.getModelManager().getTurretTemplate(state.turretId);
+                        if (tc != null) {
+                            tc.setBdeModelId(text.isEmpty() ? null : text);
+                            plugin.getModelManager().saveTurretConfig(tc);
+                            player.sendMessage("§aTurret BDE Model ID set to " + text);
+                        }
+                        Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
+                    });
+                }
+                break;
+
+            case EDIT_TURRET_DISPLAY_TAG:
+                if (state.turretId != null) {
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        TurretConfig tc = plugin.getModelManager().getTurretTemplate(state.turretId);
+                        if (tc != null) {
+                            tc.setDisplayTag(text.isEmpty() ? null : text);
+                            plugin.getModelManager().saveTurretConfig(tc);
+                            player.sendMessage("§aTurret display tag set to " + text);
+                        }
+                        Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
+                    });
+                }
+                break;
+
+            case CREATE_PROJECTILE:
+                if (text.isEmpty() || text.contains("..") || text.startsWith("/")) {
+                    player.sendMessage("§cInvalid projectile ID.");
+                    reopenMenu(player, state);
+                    break;
+                }
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    try {
+                        String cleanId = text.replaceAll("[^a-zA-Z0-9_-]", "").toLowerCase();
+                        if (cleanId.isEmpty()) {
+                            player.sendMessage("§cInvalid projectile ID.");
+                            Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
+                            return;
+                        }
+                        BdeModel.ProjectileConfig pc = new BdeModel.ProjectileConfig();
+                        pc.setName(text);
+                        plugin.getModelManager().saveProjectileConfig(cleanId, pc);
+                        player.sendMessage("§aProjectile template created: " + cleanId);
+                        Bukkit.getScheduler().runTask(plugin, () -> {
+                            plugin.getBdeGuiManager().openProjectileEditor(player, cleanId);
+                        });
+                    } catch (Exception ex) {
+                        player.sendMessage("§cFailed to create projectile: " + ex.getMessage());
+                        Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
+                    }
+                });
+                break;
+
+            case RENAME_PROJECTILE:
+                if (state.projectileId != null) {
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        BdeModel.ProjectileConfig pc = plugin.getModelManager().getProjectileConfig(state.projectileId);
+                        if (pc != null) {
+                            pc.setName(text);
+                            plugin.getModelManager().saveProjectileConfig(state.projectileId, pc);
+                            player.sendMessage("§aProjectile name updated to " + text);
+                        }
+                        Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
+                    });
+                }
+                break;
+
+            case EDIT_PROJECTILE_MODEL_ID:
+                if (state.projectileId != null) {
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        BdeModel.ProjectileConfig pc = plugin.getModelManager().getProjectileConfig(state.projectileId);
+                        if (pc != null) {
+                            pc.setBdeModelId(text.isEmpty() ? null : text);
+                            plugin.getModelManager().saveProjectileConfig(state.projectileId, pc);
+                            player.sendMessage("§aProjectile BDE Model ID set to " + text);
+                        }
+                        Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
+                    });
+                }
+                break;
+
+            case EDIT_PROJECTILE_LAUNCH_SOUND:
+                if (state.projectileId != null) {
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        BdeModel.ProjectileConfig pc = plugin.getModelManager().getProjectileConfig(state.projectileId);
+                        if (pc != null) {
+                            pc.setLaunchSound(text);
+                            plugin.getModelManager().saveProjectileConfig(state.projectileId, pc);
+                            player.sendMessage("§aProjectile launch sound set to " + text);
+                        }
+                        Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
+                    });
+                }
+                break;
+
+            case EDIT_PROJECTILE_FLY_PARTICLE:
+                if (state.projectileId != null) {
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        BdeModel.ProjectileConfig pc = plugin.getModelManager().getProjectileConfig(state.projectileId);
+                        if (pc != null) {
+                            pc.setFlyParticle(text);
+                            plugin.getModelManager().saveProjectileConfig(state.projectileId, pc);
+                            player.sendMessage("§aProjectile fly particle set to " + text);
+                        }
+                        Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
+                    });
+                }
+                break;
+
+            case EDIT_PROJECTILE_IMPACT_PARTICLE:
+                if (state.projectileId != null) {
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        BdeModel.ProjectileConfig pc = plugin.getModelManager().getProjectileConfig(state.projectileId);
+                        if (pc != null) {
+                            pc.setImpactParticle(text);
+                            plugin.getModelManager().saveProjectileConfig(state.projectileId, pc);
+                            player.sendMessage("§aProjectile impact particle set to " + text);
+                        }
+                        Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
+                    });
+                }
+                break;
+
+            case EDIT_PROJECTILE_BASE_POINT:
+                if (state.projectileId != null) {
+                    List<Double> bp;
+                    try {
+                        bp = parseCoords(text);
                     } catch (IllegalArgumentException e) {
                         player.sendMessage("§c" + e.getMessage());
                         reopenMenu(player, state);
                         break;
                     }
                     Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                m.getVehicle().getSubsystems().get(subIdx).setLaunchOffset(coords);
-                                if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                    plugin.getModelManager().saveModelConfig(m);
-                                }
-                                player.sendMessage("§aSubsystem launch offset set to " + text);
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    if (inst != null) {
-                                        recreateModelInstance(inst, player);
-                                        UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
-                                        ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, updatedModel, state.modelProjectId, subIdx);
-                                    } else {
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, null, updatedModel, state.modelProjectId, subIdx);
-                                    }
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set launch offset: " + ex.getMessage());
+                        BdeModel.ProjectileConfig pc = plugin.getModelManager().getProjectileConfig(state.projectileId);
+                        if (pc != null) {
+                            pc.setBasePoint(bp);
+                            plugin.getModelManager().saveProjectileConfig(state.projectileId, pc);
+                            player.sendMessage("§aProjectile model base point set to " + text);
                         }
+                        Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
                     });
                 }
                 break;
 
-            case EDIT_SUBSYSTEM_MIN_YAW:
-                if (state.modelProjectId != null && state.blockMaterial != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    Double val = null;
-                    if (!text.equalsIgnoreCase("none") && !text.equalsIgnoreCase("unlimited")) {
-                        try {
-                            val = Double.parseDouble(text);
-                        } catch (NumberFormatException e) {
-                            player.sendMessage("§cInvalid angle. Please enter a valid decimal number or 'none'.");
-                            reopenMenu(player, state);
-                            break;
-                        }
-                    }
-                    final Double finalVal = val;
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                m.getVehicle().getSubsystems().get(subIdx).setFovMinYaw(finalVal);
-                                if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                    plugin.getModelManager().saveModelConfig(m);
-                                }
-                                player.sendMessage("§aSubsystem minimum look yaw limit set to " + (finalVal != null ? finalVal + "°" : "Unlimited"));
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    if (inst != null) {
-                                        recreateModelInstance(inst, player);
-                                        UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
-                                        ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, updatedModel, state.modelProjectId, subIdx);
-                                    } else {
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, null, updatedModel, state.modelProjectId, subIdx);
-                                    }
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set FOV limit: " + ex.getMessage());
-                        }
-                    });
-                }
-                break;
-
-            case EDIT_SUBSYSTEM_MAX_YAW:
-                if (state.modelProjectId != null && state.blockMaterial != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    Double val = null;
-                    if (!text.equalsIgnoreCase("none") && !text.equalsIgnoreCase("unlimited")) {
-                        try {
-                            val = Double.parseDouble(text);
-                        } catch (NumberFormatException e) {
-                            player.sendMessage("§cInvalid angle. Please enter a valid decimal number or 'none'.");
-                            reopenMenu(player, state);
-                            break;
-                        }
-                    }
-                    final Double finalVal = val;
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                m.getVehicle().getSubsystems().get(subIdx).setFovMaxYaw(finalVal);
-                                if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                    plugin.getModelManager().saveModelConfig(m);
-                                }
-                                player.sendMessage("§aSubsystem maximum look yaw limit set to " + (finalVal != null ? finalVal + "°" : "Unlimited"));
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    if (inst != null) {
-                                        recreateModelInstance(inst, player);
-                                        UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
-                                        ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, updatedModel, state.modelProjectId, subIdx);
-                                    } else {
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, null, updatedModel, state.modelProjectId, subIdx);
-                                    }
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set FOV limit: " + ex.getMessage());
-                        }
-                    });
-                }
-                break;
-
-            case EDIT_SUBSYSTEM_MIN_PITCH:
-                if (state.modelProjectId != null && state.blockMaterial != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    Double val = null;
-                    if (!text.equalsIgnoreCase("none") && !text.equalsIgnoreCase("unlimited")) {
-                        try {
-                            val = Double.parseDouble(text);
-                        } catch (NumberFormatException e) {
-                            player.sendMessage("§cInvalid angle. Please enter a valid decimal number or 'none'.");
-                            reopenMenu(player, state);
-                            break;
-                        }
-                    }
-                    final Double finalVal = val;
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                m.getVehicle().getSubsystems().get(subIdx).setFovMinPitch(finalVal);
-                                if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                    plugin.getModelManager().saveModelConfig(m);
-                                }
-                                player.sendMessage("§aSubsystem minimum look pitch limit set to " + (finalVal != null ? finalVal + "°" : "Unlimited"));
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    if (inst != null) {
-                                        recreateModelInstance(inst, player);
-                                        UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
-                                        ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, updatedModel, state.modelProjectId, subIdx);
-                                    } else {
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, null, updatedModel, state.modelProjectId, subIdx);
-                                    }
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set FOV limit: " + ex.getMessage());
-                        }
-                    });
-                }
-                break;
-
-            case EDIT_SUBSYSTEM_MAX_PITCH:
-                if (state.modelProjectId != null && state.blockMaterial != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    Double val = null;
-                    if (!text.equalsIgnoreCase("none") && !text.equalsIgnoreCase("unlimited")) {
-                        try {
-                            val = Double.parseDouble(text);
-                        } catch (NumberFormatException e) {
-                            player.sendMessage("§cInvalid angle. Please enter a valid decimal number or 'none'.");
-                            reopenMenu(player, state);
-                            break;
-                        }
-                    }
-                    final Double finalVal = val;
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                m.getVehicle().getSubsystems().get(subIdx).setFovMaxPitch(finalVal);
-                                if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                    plugin.getModelManager().saveModelConfig(m);
-                                }
-                                player.sendMessage("§aSubsystem maximum look pitch limit set to " + (finalVal != null ? finalVal + "°" : "Unlimited"));
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    if (inst != null) {
-                                        recreateModelInstance(inst, player);
-                                        UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
-                                        ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, updatedModel, state.modelProjectId, subIdx);
-                                    } else {
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, null, updatedModel, state.modelProjectId, subIdx);
-                                    }
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set FOV limit: " + ex.getMessage());
-                        }
-                    });
-                }
-                break;
-
-            case EDIT_SUBSYSTEM_CAMERA_OFFSET:
-                if (state.modelProjectId != null && state.blockMaterial != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    List<Double> coords;
+            case EDIT_PROJECTILE_DIRECTION_VECTOR:
+                if (state.projectileId != null) {
+                    List<Double> dv;
                     try {
-                        coords = parseCoords(text);
+                        dv = parseCoords(text);
                     } catch (IllegalArgumentException e) {
                         player.sendMessage("§c" + e.getMessage());
                         reopenMenu(player, state);
                         break;
                     }
                     Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                m.getVehicle().getSubsystems().get(subIdx).setCameraOffset(coords);
-                                if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                    plugin.getModelManager().saveModelConfig(m);
-                                }
-                                player.sendMessage("§aSubsystem Weapon-Cam camera offset set to " + text);
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    if (inst != null) {
-                                        recreateModelInstance(inst, player);
-                                        UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
-                                        ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, updatedModel, state.modelProjectId, subIdx);
-                                    } else {
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, null, updatedModel, state.modelProjectId, subIdx);
-                                    }
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set camera offset: " + ex.getMessage());
+                        BdeModel.ProjectileConfig pc = plugin.getModelManager().getProjectileConfig(state.projectileId);
+                        if (pc != null) {
+                            pc.setDirectionVector(dv);
+                            plugin.getModelManager().saveProjectileConfig(state.projectileId, pc);
+                            player.sendMessage("§aProjectile direction vector set to " + text);
                         }
-                    });
-                }
-                break;
-
-            case EDIT_SUBSYSTEM_PIVOT_OFFSET:
-                if (state.modelProjectId != null && state.blockMaterial != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    List<Double> coords;
-                    try {
-                        coords = parseCoords(text);
-                    } catch (IllegalArgumentException e) {
-                        player.sendMessage("§c" + e.getMessage());
-                        reopenMenu(player, state);
-                        break;
-                    }
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                m.getVehicle().getSubsystems().get(subIdx).setPivotOffset(coords);
-                                if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                    plugin.getModelManager().saveModelConfig(m);
-                                }
-                                player.sendMessage("§aSubsystem pivot point offset set to " + text);
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    if (inst != null) {
-                                        recreateModelInstance(inst, player);
-                                        UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
-                                        ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, updatedModel, state.modelProjectId, subIdx);
-                                    } else {
-                                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, null, updatedModel, state.modelProjectId, subIdx);
-                                    }
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set pivot offset: " + ex.getMessage());
-                        }
-                    });
-                }
-                break;
-
-            case RENAME_WEAPON:
-                if (state.modelProjectId != null && state.blockMaterial != null && state.seatIndex != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    int modeIdx = state.seatIndex;
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                BdeModel.SubsystemConfig sub = m.getVehicle().getSubsystems().get(subIdx);
-                                if (sub.getWeaponModes() != null && modeIdx >= 0 && modeIdx < sub.getWeaponModes().size()) {
-                                    sub.getWeaponModes().get(modeIdx).setName(text);
-                                    if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                        plugin.getModelManager().saveModelConfig(m);
-                                    }
-                                    player.sendMessage("§aWeapon mode renamed to " + text);
-                                }
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    plugin.getBdeGuiManager().openWeaponModeDetailMenu(player, inst, updatedModel, state.modelProjectId, subIdx, modeIdx);
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to rename weapon mode: " + ex.getMessage());
-                        }
-                    });
-                }
-                break;
-
-            case EDIT_WEAPON_MODEL:
-                if (state.modelProjectId != null && state.blockMaterial != null && state.seatIndex != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    int modeIdx = state.seatIndex;
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                BdeModel.SubsystemConfig sub = m.getVehicle().getSubsystems().get(subIdx);
-                                if (sub.getWeaponModes() != null && modeIdx >= 0 && modeIdx < sub.getWeaponModes().size()) {
-                                    sub.getWeaponModes().get(modeIdx).setBdeModelId(text);
-                                    if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                        plugin.getModelManager().saveModelConfig(m);
-                                    }
-                                    player.sendMessage("§aWeapon model ID set to " + text);
-                                }
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    plugin.getBdeGuiManager().openWeaponModeDetailMenu(player, inst, updatedModel, state.modelProjectId, subIdx, modeIdx);
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set weapon model ID: " + ex.getMessage());
-                        }
-                    });
-                }
-                break;
-
-            case EDIT_WEAPON_SOUND:
-                if (state.modelProjectId != null && state.blockMaterial != null && state.seatIndex != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    int modeIdx = state.seatIndex;
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                BdeModel.SubsystemConfig sub = m.getVehicle().getSubsystems().get(subIdx);
-                                if (sub.getWeaponModes() != null && modeIdx >= 0 && modeIdx < sub.getWeaponModes().size()) {
-                                    sub.getWeaponModes().get(modeIdx).setLaunchSound(text);
-                                    if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                        plugin.getModelManager().saveModelConfig(m);
-                                    }
-                                    player.sendMessage("§aWeapon launch sound set to " + text);
-                                }
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    plugin.getBdeGuiManager().openWeaponModeDetailMenu(player, inst, updatedModel, state.modelProjectId, subIdx, modeIdx);
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set weapon launch sound: " + ex.getMessage());
-                        }
-                    });
-                }
-                break;
-
-            case EDIT_WEAPON_FLY_PARTICLE:
-                if (state.modelProjectId != null && state.blockMaterial != null && state.seatIndex != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    int modeIdx = state.seatIndex;
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                BdeModel.SubsystemConfig sub = m.getVehicle().getSubsystems().get(subIdx);
-                                if (sub.getWeaponModes() != null && modeIdx >= 0 && modeIdx < sub.getWeaponModes().size()) {
-                                    sub.getWeaponModes().get(modeIdx).setFlyParticle(text);
-                                    if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                        plugin.getModelManager().saveModelConfig(m);
-                                    }
-                                    player.sendMessage("§aWeapon flight particle set to " + text);
-                                }
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    plugin.getBdeGuiManager().openWeaponModeDetailMenu(player, inst, updatedModel, state.modelProjectId, subIdx, modeIdx);
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set weapon flight particle: " + ex.getMessage());
-                        }
-                    });
-                }
-                break;
-
-            case EDIT_WEAPON_IMPACT_PARTICLE:
-                if (state.modelProjectId != null && state.blockMaterial != null && state.seatIndex != null) {
-                    int subIdx = Integer.parseInt(state.blockMaterial);
-                    int modeIdx = state.seatIndex;
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        try {
-                            BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                            if (m != null && m.getVehicle() != null && subIdx >= 0 && subIdx < m.getVehicle().getSubsystems().size()) {
-                                BdeModel.SubsystemConfig sub = m.getVehicle().getSubsystems().get(subIdx);
-                                if (sub.getWeaponModes() != null && modeIdx >= 0 && modeIdx < sub.getWeaponModes().size()) {
-                                    sub.getWeaponModes().get(modeIdx).setImpactParticle(text);
-                                    if (m.getLocalFilePath() != null && m.isVehicleLibrary()) {
-                                        plugin.getModelManager().saveModelConfig(m);
-                                    }
-                                    player.sendMessage("§aWeapon impact particle set to " + text);
-                                }
-                            }
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                                try {
-                                    BdeModel updatedModel = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                                    plugin.getBdeGuiManager().openWeaponModeDetailMenu(player, inst, updatedModel, state.modelProjectId, subIdx, modeIdx);
-                                } catch (Exception ignored) {}
-                            });
-                        } catch (Exception ex) {
-                            player.sendMessage("§cFailed to set weapon impact particle: " + ex.getMessage());
-                        }
+                        Bukkit.getScheduler().runTask(plugin, () -> reopenMenu(player, state));
                     });
                 }
                 break;
@@ -2042,6 +1882,7 @@ public class BdeGuiListener implements Listener {
                         plugin.getBdeGuiManager().openVehicleBlockOverridesMenu(player, inst, model, state.modelProjectId);
                     } catch (Exception ignored) {}
                     break;
+                case EXPORT_TURRET_TEMPLATE:
                 case RENAME_SUBSYSTEM:
                 case EDIT_SUBSYSTEM_TAG:
                 case EDIT_SUBSYSTEM_BDE_MODEL_ID:
@@ -2059,18 +1900,25 @@ public class BdeGuiListener implements Listener {
                         plugin.getBdeGuiManager().openSubsystemDetailMenu(player, inst, m, state.modelProjectId, subIdx);
                     } catch (Exception ignored) {}
                     break;
-                case RENAME_WEAPON:
-                case EDIT_WEAPON_MODEL:
-                case EDIT_WEAPON_SOUND:
-                case EDIT_WEAPON_FLY_PARTICLE:
-                case EDIT_WEAPON_IMPACT_PARTICLE:
-                    try {
-                        int subIdx = Integer.parseInt(state.blockMaterial);
-                        int modeIdx = state.seatIndex;
-                        ModelInstance inst = state.instanceId != null ? plugin.getModelManager().getActiveInstances().get(state.instanceId) : null;
-                        BdeModel m = plugin.getModelManager().loadModelSync(state.modelProjectId);
-                        plugin.getBdeGuiManager().openWeaponModeDetailMenu(player, inst, m, state.modelProjectId, subIdx, modeIdx);
-                    } catch (Exception ignored) {}
+                case CREATE_TURRET:
+                    plugin.getBdeGuiManager().openTurretCatalog(player);
+                    break;
+                case RENAME_TURRET:
+                case EDIT_TURRET_MODEL_ID:
+                case EDIT_TURRET_DISPLAY_TAG:
+                    plugin.getBdeGuiManager().openTurretEditor(player, state.turretId);
+                    break;
+                case CREATE_PROJECTILE:
+                    plugin.getBdeGuiManager().openProjectileCatalog(player);
+                    break;
+                case RENAME_PROJECTILE:
+                case EDIT_PROJECTILE_MODEL_ID:
+                case EDIT_PROJECTILE_LAUNCH_SOUND:
+                case EDIT_PROJECTILE_FLY_PARTICLE:
+                case EDIT_PROJECTILE_IMPACT_PARTICLE:
+                case EDIT_PROJECTILE_BASE_POINT:
+                case EDIT_PROJECTILE_DIRECTION_VECTOR:
+                    plugin.getBdeGuiManager().openProjectileEditor(player, state.projectileId);
                     break;
             }
         });
@@ -2543,7 +2391,7 @@ public class BdeGuiListener implements Listener {
         if (instance == null || instance.getModel().getVehicle() == null) return;
 
         BdeModel.SubsystemConfig controlledSub = getControlledSubsystem(player, instance);
-        if (controlledSub == null || controlledSub.getWeaponModes().isEmpty()) return;
+        if (controlledSub == null || controlledSub.getWeaponModes(plugin.getModelManager()).isEmpty()) return;
 
         event.setCancelled(true);
         player.getInventory().setHeldItemSlot(event.getPreviousSlot());
@@ -2552,11 +2400,11 @@ public class BdeGuiListener implements Listener {
         if (delta == 8) delta = -1;
         if (delta == -8) delta = 1;
 
-        List<String> modes = controlledSub.getWeaponModes().stream().map(BdeModel.ProjectileConfig::getName).collect(java.util.stream.Collectors.toList());
+        List<String> modes = controlledSub.getWeaponModes(plugin.getModelManager()).stream().map(BdeModel.ProjectileConfig::getName).collect(java.util.stream.Collectors.toList());
         instance.cycleSubsystemMode(player.getUniqueId(), controlledSub.getName(), delta, modes);
 
         int newIdx = instance.getSubsystemMode(player.getUniqueId(), controlledSub.getName());
-        String newMode = controlledSub.getWeaponModes().get(newIdx).getName();
+        String newMode = controlledSub.getWeaponModes(plugin.getModelManager()).get(newIdx).getName();
         player.sendMessage("§eSubsystem §6" + controlledSub.getName() + " §eMode: §f§l" + newMode.toUpperCase());
     }
 
@@ -2667,7 +2515,6 @@ public class BdeGuiListener implements Listener {
         if (slot == 46) { // Add Subsystem
             BdeModel.SubsystemConfig sub = new BdeModel.SubsystemConfig();
             sub.setName("Subsystem " + (cfg.getSubsystems().size() + 1));
-            sub.setDisplayTag("sub_" + cfg.getSubsystems().size());
             cfg.getSubsystems().add(sub);
             if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
                 plugin.getModelManager().saveModelConfig(model);
@@ -2779,27 +2626,34 @@ public class BdeGuiListener implements Listener {
             return;
         }
 
-        if (slot == 15) { // Edit Display Tag
-            player.closeInventory();
-            player.sendMessage("§ePlease type the scoreboard tag identifying this subsystem's displays in chat (or type 'cancel' to exit):");
-            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_SUBSYSTEM_TAG, modelProjectId, holder.getSelectedModelId(), null, String.valueOf(subIndex)));
-            return;
-        }
-
         if (slot == 16) { // Interactive Placement Mode
             plugin.getModelManager().startPlacementSession(player, instance != null ? instance.getId() : null, modelProjectId, subIndex);
             return;
         }
 
-        if (slot == 22) { // Open Weapon Modes List
-            plugin.getBdeGuiManager().openWeaponModeListMenu(player, instance, model, modelProjectId, subIndex);
+        if (slot == 27) { // Link/Unlink Turret Template
+            if (event.getClick().isRightClick()) {
+                sub.setTurretId(null);
+                if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
+                    plugin.getModelManager().saveModelConfig(model);
+                }
+                recreateModelInstance(instance, player);
+                UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
+                ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
+                
+                player.sendMessage("§aTurret template unlinked successfully!");
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+                plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, model, modelProjectId, subIndex);
+            } else {
+                plugin.getBdeGuiManager().openTurretLinkMenu(player, instance, model, modelProjectId, subIndex);
+            }
             return;
         }
 
-        if (slot == 28) { // Edit subsystem BDE model ID
+        if (slot == 26) { // Export Subsystem as Turret Template
             player.closeInventory();
-            player.sendMessage("§ePlease type the Model ID to mount as a subsystem (or type 'cancel' to exit):");
-            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_SUBSYSTEM_BDE_MODEL_ID, modelProjectId, holder.getSelectedModelId(), null, String.valueOf(subIndex)));
+            player.sendMessage("§ePlease type the ID for the new turret template (alphanumeric, no spaces, or type 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EXPORT_TURRET_TEMPLATE, modelProjectId, holder.getSelectedModelId(), null, String.valueOf(subIndex)));
             return;
         }
 
@@ -2828,148 +2682,56 @@ public class BdeGuiListener implements Listener {
             return;
         }
 
-        if (slot == 30) { // Launching Point Offset
+        if (slot == 38 || slot == 39 || slot == 40) {
+            double delta = event.isShiftClick() ? 0.01 : 0.1;
             if (event.getClick().isRightClick()) {
-                player.closeInventory();
-                player.sendMessage("§ePlease type the launching offset relative to subsystem as X, Y, Z (decimals allowed, or type 'cancel' to exit):");
-                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_SUBSYSTEM_LAUNCH_OFFSET, modelProjectId, holder.getSelectedModelId(), null, String.valueOf(subIndex)));
+                delta = -delta;
+            }
+
+            List<Double> offset = sub.getMountOffset();
+            if (offset == null || offset.isEmpty()) {
+                offset = new java.util.ArrayList<>(java.util.Arrays.asList(0.0, 0.0, 0.0));
             } else {
-                if (instance == null || instance.getVehicleRoot() == null) {
-                    player.sendMessage("§cYou can only align offsets when there is an active spawned instance in the world.");
-                    return;
-                }
-                List<Double> offset = getPlayerRelativeOffset(player, instance, model);
-                List<Double> mount = sub.getMountOffset();
-                if (mount != null && mount.size() == 3) {
-                    offset.set(0, offset.get(0) - mount.get(0));
-                    offset.set(1, offset.get(1) - mount.get(1));
-                    offset.set(2, offset.get(2) - mount.get(2));
-                }
-                int precision = plugin.getBdeGuiManager().getPrecision(player.getUniqueId());
-                if (precision >= 0) {
-                    double factor = Math.pow(10, precision);
-                    offset.set(0, Math.round(offset.get(0) * factor) / factor);
-                    offset.set(1, Math.round(offset.get(1) * factor) / factor);
-                    offset.set(2, Math.round(offset.get(2) * factor) / factor);
-                }
-                sub.setLaunchOffset(offset);
+                offset = new java.util.ArrayList<>(offset);
+            }
+
+            while (offset.size() < 3) {
+                offset.add(0.0);
+            }
+
+            int axisIndex = slot - 38; // 0 for X, 1 for Y, 2 for Z
+            offset.set(axisIndex, offset.get(axisIndex) + delta);
+            sub.setMountOffset(offset);
+
+            if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
+                plugin.getModelManager().saveModelConfig(model);
+            }
+
+            recreateModelInstance(instance, player);
+            UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
+            ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
+            plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, model, modelProjectId, subIndex);
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+            return;
+        }
+
+        if (slot == 22) { // Override projectiles
+            if (event.getClick().isRightClick()) {
+                sub.setProjectileOverrides(null);
                 if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
                     plugin.getModelManager().saveModelConfig(model);
                 }
-                recreateModelInstance(instance, player);
-                UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
-                ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
-                plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, model, modelProjectId, subIndex);
-                player.sendMessage("§aSubsystem launching point aligned to player location!");
-                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.5f);
-            }
-            return;
-        }
-
-        if (slot == 31) { // FOV Yaw Clamps
-            if (event.getClick().isRightClick()) {
-                player.closeInventory();
-                player.sendMessage("§ePlease type the maximum look yaw limit relative to vehicle root (in degrees, or type 'cancel' to exit):");
-                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_SUBSYSTEM_MAX_YAW, modelProjectId, holder.getSelectedModelId(), null, String.valueOf(subIndex)));
+                player.sendMessage("§aProjectile overrides reset to turret defaults.");
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+                plugin.getBdeGuiManager().openSubsystemDetailMenu(player, instance, model, modelProjectId, subIndex);
             } else {
-                player.closeInventory();
-                player.sendMessage("§ePlease type the minimum look yaw limit relative to vehicle root (in degrees, or type 'cancel' to exit):");
-                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_SUBSYSTEM_MIN_YAW, modelProjectId, holder.getSelectedModelId(), null, String.valueOf(subIndex)));
-            }
-            return;
-        }
-
-        if (slot == 32) { // FOV Pitch Clamps
-            if (event.getClick().isRightClick()) {
-                player.closeInventory();
-                player.sendMessage("§ePlease type the maximum look pitch limit relative to vehicle root (in degrees, or type 'cancel' to exit):");
-                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_SUBSYSTEM_MAX_PITCH, modelProjectId, holder.getSelectedModelId(), null, String.valueOf(subIndex)));
-            } else {
-                player.closeInventory();
-                player.sendMessage("§ePlease type the minimum look pitch limit relative to vehicle root (in degrees, or type 'cancel' to exit):");
-                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_SUBSYSTEM_MIN_PITCH, modelProjectId, holder.getSelectedModelId(), null, String.valueOf(subIndex)));
-            }
-            return;
-        }
-
-        if (slot == 33) { // Weapon-Cam Camera Offset
-            if (event.getClick().isRightClick()) {
-                player.closeInventory();
-                player.sendMessage("§ePlease type the Weapon-Cam camera offset relative to subsystem mount point as X, Y, Z (decimals allowed, or type 'cancel' to exit):");
-                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_SUBSYSTEM_CAMERA_OFFSET, modelProjectId, holder.getSelectedModelId(), null, String.valueOf(subIndex)));
-            } else {
-                if (instance == null || instance.getVehicleRoot() == null) {
-                    player.sendMessage("§cYou can only align offsets when there is an active spawned instance in the world.");
-                    return;
-                }
-                List<Double> offset = getPlayerRelativeOffset(player, instance, model);
-                List<Double> mount = sub.getMountOffset();
-                if (mount != null && mount.size() == 3) {
-                    offset.set(0, offset.get(0) - mount.get(0));
-                    offset.set(1, offset.get(1) - mount.get(1));
-                    offset.set(2, offset.get(2) - mount.get(2));
-                }
-                int precision = plugin.getBdeGuiManager().getPrecision(player.getUniqueId());
-                if (precision >= 0) {
-                    double factor = Math.pow(10, precision);
-                    offset.set(0, Math.round(offset.get(0) * factor) / factor);
-                    offset.set(1, Math.round(offset.get(1) * factor) / factor);
-                    offset.set(2, Math.round(offset.get(2) * factor) / factor);
-                }
-                sub.setCameraOffset(offset);
-                if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
-                    plugin.getModelManager().saveModelConfig(model);
-                }
-                recreateModelInstance(instance, player);
-                UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
-                ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
-                plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, model, modelProjectId, subIndex);
-                player.sendMessage("§aSubsystem camera offset aligned to player location!");
-                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.5f);
-            }
-            return;
-        }
-
-        if (slot == 34) { // Pivot Point Offset
-            if (event.getClick().isRightClick()) {
-                player.closeInventory();
-                player.sendMessage("§ePlease type the Pivot Point Offset relative to subsystem origin as X, Y, Z (decimals allowed, or type 'cancel' to exit):");
-                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_SUBSYSTEM_PIVOT_OFFSET, modelProjectId, holder.getSelectedModelId(), null, String.valueOf(subIndex)));
-            } else {
-                if (instance == null || instance.getVehicleRoot() == null) {
-                    player.sendMessage("§cYou can only align offsets when there is an active spawned instance in the world.");
-                    return;
-                }
-                List<Double> offset = getPlayerRelativeOffset(player, instance, model);
-                List<Double> mount = sub.getMountOffset();
-                if (mount != null && mount.size() == 3) {
-                    offset.set(0, offset.get(0) - mount.get(0));
-                    offset.set(1, offset.get(1) - mount.get(1));
-                    offset.set(2, offset.get(2) - mount.get(2));
-                }
-                int precision = plugin.getBdeGuiManager().getPrecision(player.getUniqueId());
-                if (precision >= 0) {
-                    double factor = Math.pow(10, precision);
-                    offset.set(0, Math.round(offset.get(0) * factor) / factor);
-                    offset.set(1, Math.round(offset.get(1) * factor) / factor);
-                    offset.set(2, Math.round(offset.get(2) * factor) / factor);
-                }
-                sub.setPivotOffset(offset);
-                if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
-                    plugin.getModelManager().saveModelConfig(model);
-                }
-                recreateModelInstance(instance, player);
-                UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
-                ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
-                plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, model, modelProjectId, subIndex);
-                player.sendMessage("§aSubsystem pivot point offset aligned to player location!");
-                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.5f);
+                plugin.getBdeGuiManager().openSubsystemProjectileOverrideMenu(player, instance, model, modelProjectId, subIndex);
             }
             return;
         }
     }
 
-    private void handleWeaponModeListClick(Player player, ModelInstance instance, BdeGuiHolder holder, int slot, ItemStack clickedItem, InventoryClickEvent event) {
+    private void handleTurretLinkMenuClick(Player player, ModelInstance instance, BdeGuiHolder holder, int slot, ItemStack clickedItem, InventoryClickEvent event) {
         String modelProjectId = holder.getModelProjectId();
         if (modelProjectId == null && instance != null) {
             modelProjectId = instance.getModel().getProjectId();
@@ -3004,191 +2766,49 @@ public class BdeGuiListener implements Listener {
         }
         BdeModel.SubsystemConfig sub = cfg.getSubsystems().get(subIndex);
 
-        if (slot == 45) { // Back to Subsystem Details
+        if (slot == 45) { // Back to Details
             plugin.getBdeGuiManager().openSubsystemDetailMenu(player, instance, model, modelProjectId, subIndex);
             return;
         }
 
-        if (slot == 46) { // Add Weapon Mode
-            BdeModel.ProjectileConfig newProj = new BdeModel.ProjectileConfig();
-            newProj.setName("Dumb Fire " + (sub.getWeaponModes().size() + 1));
-            sub.getWeaponModes().add(newProj);
-            if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
-                plugin.getModelManager().saveModelConfig(model);
-            }
-            plugin.getBdeGuiManager().openWeaponModeListMenu(player, instance, model, modelProjectId, subIndex);
-            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.5f);
+        if (slot == 49) { // Close
+            player.closeInventory();
             return;
         }
 
-        // Clicked a weapon mode item
-        List<Integer> slots = java.util.Arrays.asList(
-            11, 12, 13, 14, 15, 16,
-            19, 20, 21, 22, 23, 24, 25,
-            28, 29, 30, 31, 32, 33, 34,
-            37, 38, 39, 40, 41, 42, 43
-        );
-        int idx = slots.indexOf(slot);
-        if (idx >= 0 && idx < sub.getWeaponModes().size()) {
-            if (event.getClick().isRightClick()) {
-                sub.getWeaponModes().remove(idx);
-                if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
-                    plugin.getModelManager().saveModelConfig(model);
+        if (slot >= 9 && slot < 45 && (slot % 9 != 0) && (slot % 9 != 8)) {
+            ItemMeta meta = clickedItem.getItemMeta();
+            if (meta != null && meta.getLore() != null) {
+                for (String line : meta.getLore()) {
+                    if (line.startsWith("§7ID: §f")) {
+                        String turretId = line.substring(8);
+                        sub.setTurretId(turretId);
+                        
+                        if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
+                            plugin.getModelManager().saveModelConfig(model);
+                        }
+                        
+                        recreateModelInstance(instance, player);
+                        UUID selectedId = plugin.getBdeGuiManager().getSelectedModel(player.getUniqueId());
+                        ModelInstance newInst = plugin.getModelManager().getActiveInstances().get(selectedId);
+                        
+                        player.sendMessage("§aTurret template §b" + turretId + " §alinked successfully!");
+                        player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.5f);
+                        
+                        plugin.getBdeGuiManager().openSubsystemDetailMenu(player, newInst, model, modelProjectId, subIndex);
+                        return;
+                    }
                 }
-                player.sendMessage("§aWeapon mode deleted.");
-                plugin.getBdeGuiManager().openWeaponModeListMenu(player, instance, model, modelProjectId, subIndex);
-                player.playSound(player.getLocation(), Sound.BLOCK_ANVIL_BREAK, 0.5f, 1.0f);
-            } else {
-                plugin.getBdeGuiManager().openWeaponModeDetailMenu(player, instance, model, modelProjectId, subIndex, idx);
-                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.0f);
             }
         }
     }
 
+    private void handleWeaponModeListClick(Player player, ModelInstance instance, BdeGuiHolder holder, int slot, ItemStack clickedItem, InventoryClickEvent event) {
+        // Weapon modes are now read-only defined on TurretConfig templates
+    }
+
     private void handleWeaponModeDetailClick(Player player, ModelInstance instance, BdeGuiHolder holder, int slot, ItemStack clickedItem, InventoryClickEvent event) {
-        String modelProjectId = holder.getModelProjectId();
-        if (modelProjectId == null && instance != null) {
-            modelProjectId = instance.getModel().getProjectId();
-        }
-        BdeModel model = null;
-        if (instance != null) {
-            model = instance.getModel();
-        } else if (modelProjectId != null) {
-            try {
-                model = plugin.getModelManager().loadModelSync(modelProjectId);
-            } catch (Exception ex) {
-                player.sendMessage("§cFailed to load model: " + ex.getMessage());
-                player.closeInventory();
-                return;
-            }
-        }
-        if (model == null) {
-            player.closeInventory();
-            return;
-        }
-
-        BdeModel.VehicleConfig cfg = model.getVehicle();
-        if (cfg == null) {
-            player.closeInventory();
-            return;
-        }
-
-        int subIndex = holder.getSubsystemIndex();
-        int modeIndex = holder.getWeaponModeIndex();
-        if (subIndex < 0 || subIndex >= cfg.getSubsystems().size()) {
-            player.closeInventory();
-            return;
-        }
-        BdeModel.SubsystemConfig sub = cfg.getSubsystems().get(subIndex);
-        if (sub.getWeaponModes() == null || modeIndex < 0 || modeIndex >= sub.getWeaponModes().size()) {
-            player.closeInventory();
-            return;
-        }
-        BdeModel.ProjectileConfig proj = sub.getWeaponModes().get(modeIndex);
-
-        if (slot == 45) { // Back to Weapon Modes List
-            plugin.getBdeGuiManager().openWeaponModeListMenu(player, instance, model, modelProjectId, subIndex);
-            return;
-        }
-
-        boolean isRightClick = event.getClick().isRightClick();
-        double factor = isRightClick ? -1.0 : 1.0;
-
-        switch (slot) {
-            case 10: // Rename Weapon
-                player.closeInventory();
-                player.sendMessage("§ePlease type the new name for the weapon mode in chat (or type 'cancel' to exit):");
-                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.RENAME_WEAPON, modelProjectId, holder.getSelectedModelId(), modeIndex, String.valueOf(subIndex)));
-                return;
-
-            case 11: // Damage
-                proj.setDamage(Math.max(0.0, proj.getDamage() + 1.0 * factor));
-                break;
-
-            case 12: // Speed
-                proj.setSpeed(Math.max(0.1, proj.getSpeed() + 0.1 * factor));
-                break;
-
-            case 13: // Cooldown
-                proj.setCooldown(Math.max(0.1, proj.getCooldown() + 0.1 * factor));
-                break;
-
-            case 14: // Gravity toggle
-                proj.setHasGravity(!proj.isHasGravity());
-                break;
-
-            case 15: // On Hit toggle
-                String hit = proj.getOnHit();
-                if ("despawn".equalsIgnoreCase(hit)) {
-                    proj.setOnHit("explode");
-                } else if ("explode".equalsIgnoreCase(hit)) {
-                    proj.setOnHit("laser");
-                } else {
-                    proj.setOnHit("despawn");
-                }
-                break;
-
-            case 16: // Explosion Power
-                proj.setExplosionPower(Math.max(0.0, proj.getExplosionPower() + 0.5 * factor));
-                break;
-
-            case 19: // Destroy Blocks toggle
-                proj.setDestroyBlocks(!proj.isDestroyBlocks());
-                break;
-
-            case 20: // Vanilla Explosion Damage toggle
-                proj.setVanillaExplosionDamage(!proj.isVanillaExplosionDamage());
-                break;
-
-            case 21: // Lock-On Homing toggle
-                proj.setLockOn(!proj.isLockOn());
-                break;
-
-            case 22: // Lock Range
-                proj.setLockRange(Math.max(0.0, proj.getLockRange() + 5.0 * factor));
-                break;
-
-            case 23: // Lock Angle
-                proj.setLockAngle(Math.max(0.0, Math.min(180.0, proj.getLockAngle() + 5.0 * factor)));
-                break;
-
-            case 24: // Lock Time
-                proj.setLockTime(Math.max(0.1, proj.getLockTime() + 0.5 * factor));
-                break;
-
-            case 28: // Edit BDE Projectile Model ID
-                player.closeInventory();
-                player.sendMessage("§ePlease type the BDE model ID to use for the projectile display in chat (or type 'cancel' to exit):");
-                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_WEAPON_MODEL, modelProjectId, holder.getSelectedModelId(), modeIndex, String.valueOf(subIndex)));
-                return;
-
-            case 29: // Edit Launch Sound
-                player.closeInventory();
-                player.sendMessage("§ePlease type the launch sound key (e.g. ENTITY_GENERIC_EXPLODE) in chat (or type 'cancel' to exit):");
-                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_WEAPON_SOUND, modelProjectId, holder.getSelectedModelId(), modeIndex, String.valueOf(subIndex)));
-                return;
-
-            case 30: // Edit Fly Particle
-                player.closeInventory();
-                player.sendMessage("§ePlease type the flight particle type (e.g. DUST) in chat (or type 'cancel' to exit):");
-                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_WEAPON_FLY_PARTICLE, modelProjectId, holder.getSelectedModelId(), modeIndex, String.valueOf(subIndex)));
-                return;
-
-            case 31: // Edit Impact Particle
-                player.closeInventory();
-                player.sendMessage("§ePlease type the impact particle type (e.g. EXPLOSION) in chat (or type 'cancel' to exit):");
-                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_WEAPON_IMPACT_PARTICLE, modelProjectId, holder.getSelectedModelId(), modeIndex, String.valueOf(subIndex)));
-                return;
-
-            default:
-                return;
-        }
-
-        if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
-            plugin.getModelManager().saveModelConfig(model);
-        }
-        plugin.getBdeGuiManager().openWeaponModeDetailMenu(player, instance, model, modelProjectId, subIndex, modeIndex);
-        player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, isRightClick ? 0.8f : 1.2f);
+        // Weapon modes are now read-only defined on TurretConfig templates
     }
 
     private List<Double> getPlayerRelativeOffset(Player player, ModelInstance instance, BdeModel model) {
@@ -3304,6 +2924,483 @@ public class BdeGuiListener implements Listener {
         if (event.getCurrentItem() != null && event.getCurrentItem().hasItemMeta() && 
             "§e§lSubsystem Operator Controls".equals(event.getCurrentItem().getItemMeta().getDisplayName())) {
             event.setCancelled(true);
+        }
+    }
+
+    private void handleTurretCatalogClick(Player player, BdeGuiHolder holder, int slot, ItemStack clickedItem, InventoryClickEvent event) {
+        if (slot == 49) {
+            player.closeInventory();
+            return;
+        }
+
+        if (slot == 46) { // Create turret template
+            player.closeInventory();
+            player.sendMessage("§ePlease type the ID/Name for the new turret template (alphanumeric, no spaces, or type 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.CREATE_TURRET, null, null));
+            return;
+        }
+
+        if (clickedItem.getType() == Material.CROSSBOW) {
+            ItemMeta meta = clickedItem.getItemMeta();
+            if (meta != null && meta.getLore() != null) {
+                // Find ID line
+                String tId = null;
+                for (String line : meta.getLore()) {
+                    if (line.contains("ID: ")) {
+                        tId = ChatColor.stripColor(line).replace("ID: ", "").trim();
+                        break;
+                    }
+                }
+                if (tId != null) {
+                    if (event.getClick().isRightClick()) {
+                        // Delete turret template
+                        boolean deleted = plugin.getModelManager().deleteTurretConfig(tId);
+                        if (deleted) {
+                            player.sendMessage("§aTurret template '" + tId + "' deleted.");
+                            player.playSound(player.getLocation(), Sound.BLOCK_ANVIL_BREAK, 0.5f, 1.0f);
+                        } else {
+                            player.sendMessage("§cFailed to delete turret template.");
+                        }
+                        plugin.getBdeGuiManager().openTurretCatalog(player);
+                    } else {
+                        plugin.getBdeGuiManager().openTurretEditor(player, tId);
+                    }
+                }
+            }
+        }
+    }
+
+    private void handleTurretEditorClick(Player player, BdeGuiHolder holder, int slot, ItemStack clickedItem, InventoryClickEvent event) {
+        String turretId = holder.getTurretId();
+        TurretConfig tc = plugin.getModelManager().getTurretTemplate(turretId);
+        if (tc == null) {
+            player.closeInventory();
+            return;
+        }
+
+        if (slot == 45) { // Back
+            plugin.getBdeGuiManager().openTurretCatalog(player);
+            return;
+        }
+        if (slot == 49) { // Close
+            player.closeInventory();
+            return;
+        }
+        if (slot == 53) { // Save
+            plugin.getModelManager().saveTurretConfig(tc);
+            player.sendMessage("§aTurret template configuration saved to disk.");
+            player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 0.5f, 1.2f);
+            plugin.getBdeGuiManager().openTurretCatalog(player);
+            return;
+        }
+
+        if (slot == 10) { // Rename
+            player.closeInventory();
+            player.sendMessage("§ePlease type the new name for the turret in chat (or type 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.RENAME_TURRET, turretId, null));
+            return;
+        }
+
+        if (slot == 11) { // Set BDE Model ID
+            player.closeInventory();
+            player.sendMessage("§ePlease type the BDE Model ID for the turret in chat (or type 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_TURRET_MODEL_ID, turretId, null));
+            return;
+        }
+
+        if (slot == 12) { // Set Display Tag
+            player.closeInventory();
+            player.sendMessage("§ePlease type the display tag for the turret in chat (or type 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_TURRET_DISPLAY_TAG, turretId, null));
+            return;
+        }
+
+        // Click on Offsets redirects to interactive placement
+        if (slot == 14) { // Pivot Offset interactive (Stage 1 only)
+            plugin.getModelManager().startTurretPlacementSession(player, turretId);
+            return;
+        }
+        if (slot == 15) { // Muzzle Offset interactive (Stage 2 only)
+            plugin.getModelManager().startTurretPlacementSession(player, turretId);
+            ModelManager.PlacementSession s = plugin.getModelManager().getPlacementSession(player.getUniqueId());
+            if (s != null) s.step = ModelManager.PlacementStep.LAUNCH_POINT;
+            return;
+        }
+        if (slot == 16) { // Camera Offset interactive (Stage 3 only)
+            plugin.getModelManager().startTurretPlacementSession(player, turretId);
+            ModelManager.PlacementSession s = plugin.getModelManager().getPlacementSession(player.getUniqueId());
+            if (s != null) s.step = ModelManager.PlacementStep.CAMERA_OFFSET;
+            return;
+        }
+        if (slot == 22) { // Enter full interactive placement mode
+            plugin.getModelManager().startTurretPlacementSession(player, turretId);
+            return;
+        }
+
+        // FOV Clamps
+        if (slot == 28 || slot == 29 || slot == 30 || slot == 31) {
+            double delta = event.getClick().isRightClick() ? -5.0 : 5.0;
+            if (event.isShiftClick()) {
+                delta = event.getClick().isRightClick() ? -1.0 : 1.0;
+            }
+
+            if (slot == 28) {
+                double val = tc.getFovMinYaw() != null ? tc.getFovMinYaw() : 0.0;
+                tc.setFovMinYaw(val + delta);
+            } else if (slot == 29) {
+                double val = tc.getFovMaxYaw() != null ? tc.getFovMaxYaw() : 0.0;
+                tc.setFovMaxYaw(val + delta);
+            } else if (slot == 30) {
+                double val = tc.getFovMinPitch() != null ? tc.getFovMinPitch() : 0.0;
+                tc.setFovMinPitch(val + delta);
+            } else if (slot == 31) {
+                double val = tc.getFovMaxPitch() != null ? tc.getFovMaxPitch() : 0.0;
+                tc.setFovMaxPitch(val + delta);
+            }
+
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.2f);
+            plugin.getBdeGuiManager().openTurretEditor(player, turretId);
+            return;
+        }
+
+        if (slot == 37) { // Open Default Projectiles link menu
+            plugin.getBdeGuiManager().openTurretProjectileLinkMenu(player, turretId);
+            return;
+        }
+    }
+
+    private void handleTurretProjectileLinkClick(Player player, BdeGuiHolder holder, int slot, ItemStack clickedItem, InventoryClickEvent event) {
+        String turretId = holder.getTurretId();
+        TurretConfig tc = plugin.getModelManager().getTurretTemplate(turretId);
+        if (tc == null) {
+            player.closeInventory();
+            return;
+        }
+
+        if (slot == 45) { // Back to editor
+            plugin.getBdeGuiManager().openTurretEditor(player, turretId);
+            return;
+        }
+        if (slot == 49) { // Close
+            player.closeInventory();
+            return;
+        }
+
+        if (clickedItem.getType() == Material.LIME_DYE || clickedItem.getType() == Material.GRAY_DYE) {
+            String pId = ChatColor.stripColor(clickedItem.getItemMeta().getDisplayName()).trim();
+            List<String> projs = tc.getProjectileIds();
+            if (projs.contains(pId)) {
+                projs.remove(pId);
+                player.sendMessage("§cUnlinked projectile default: " + pId);
+            } else {
+                projs.add(pId);
+                player.sendMessage("§aLinked projectile default: " + pId);
+            }
+            tc.setProjectileIds(projs);
+            plugin.getModelManager().saveTurretConfig(tc);
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+            plugin.getBdeGuiManager().openTurretProjectileLinkMenu(player, turretId);
+        }
+    }
+
+    private void handleProjectileCatalogClick(Player player, BdeGuiHolder holder, int slot, ItemStack clickedItem, InventoryClickEvent event) {
+        if (slot == 49) {
+            player.closeInventory();
+            return;
+        }
+
+        if (slot == 46) { // Create projectile template
+            player.closeInventory();
+            player.sendMessage("§ePlease type the ID/Name for the new projectile template (alphanumeric, no spaces, or type 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.CREATE_PROJECTILE, null, null));
+            return;
+        }
+
+        if (clickedItem.getType() == Material.ARROW) {
+            ItemMeta meta = clickedItem.getItemMeta();
+            if (meta != null && meta.getLore() != null) {
+                // Find ID line
+                String pId = null;
+                for (String line : meta.getLore()) {
+                    if (line.contains("ID: ")) {
+                        pId = ChatColor.stripColor(line).replace("ID: ", "").trim();
+                        break;
+                    }
+                }
+                if (pId != null) {
+                    if (event.getClick().isRightClick()) {
+                        // Delete projectile template
+                        boolean deleted = plugin.getModelManager().deleteProjectileConfig(pId);
+                        if (deleted) {
+                            player.sendMessage("§aProjectile template '" + pId + "' deleted.");
+                            player.playSound(player.getLocation(), Sound.BLOCK_ANVIL_BREAK, 0.5f, 1.0f);
+                        } else {
+                            player.sendMessage("§cFailed to delete projectile template.");
+                        }
+                        plugin.getBdeGuiManager().openProjectileCatalog(player);
+                    } else {
+                        plugin.getBdeGuiManager().openProjectileEditor(player, pId);
+                    }
+                }
+            }
+        }
+    }
+
+    private void handleProjectileEditorClick(Player player, BdeGuiHolder holder, int slot, ItemStack clickedItem, InventoryClickEvent event) {
+        String projectileId = holder.getProjectileId();
+        BdeModel.ProjectileConfig pc = plugin.getModelManager().getProjectileConfig(projectileId);
+        if (pc == null) {
+            player.closeInventory();
+            return;
+        }
+
+        if (slot == 45) { // Back to catalog
+            plugin.getBdeGuiManager().openProjectileCatalog(player);
+            return;
+        }
+        if (slot == 49) { // Close
+            player.closeInventory();
+            return;
+        }
+        if (slot == 53) { // Save
+            plugin.getModelManager().saveProjectileConfig(projectileId, pc);
+            player.sendMessage("§aProjectile template saved to disk.");
+            player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 0.5f, 1.2f);
+            plugin.getBdeGuiManager().openProjectileCatalog(player);
+            return;
+        }
+
+        if (slot == 10) { // Rename
+            player.closeInventory();
+            player.sendMessage("§ePlease type the new name for the projectile in chat (or type 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.RENAME_PROJECTILE, null, projectileId));
+            return;
+        }
+
+        if (slot == 11) { // Set BDE Model ID
+            player.closeInventory();
+            player.sendMessage("§ePlease type the BDE Model ID for the projectile in chat (or type 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_PROJECTILE_MODEL_ID, null, projectileId));
+            return;
+        }
+
+        // Speed, Damage, Cooldown
+        if (slot == 19 || slot == 20 || slot == 21) {
+            double delta = event.getClick().isRightClick() ? -0.1 : 0.1;
+            if (event.isShiftClick()) {
+                delta = event.getClick().isRightClick() ? -0.5 : 0.5;
+            }
+
+            if (slot == 19) {
+                pc.setSpeed(Math.max(0.1, pc.getSpeed() + delta));
+            } else if (slot == 20) {
+                if (event.isShiftClick()) {
+                    delta = event.getClick().isRightClick() ? -5.0 : 5.0;
+                } else {
+                    delta = event.getClick().isRightClick() ? -1.0 : 1.0;
+                }
+                pc.setDamage(Math.max(0.0, pc.getDamage() + delta));
+            } else if (slot == 21) {
+                pc.setCooldown(Math.max(0.05, pc.getCooldown() + delta));
+            }
+
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.2f);
+            plugin.getBdeGuiManager().openProjectileEditor(player, projectileId);
+            return;
+        }
+
+        if (slot == 22) { // Toggle Gravity
+            pc.setHasGravity(!pc.isHasGravity());
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, pc.isHasGravity() ? 1.5f : 0.8f);
+            plugin.getBdeGuiManager().openProjectileEditor(player, projectileId);
+            return;
+        }
+
+        if (slot == 28) { // Cycle onHit action
+            String current = pc.getOnHit();
+            String next = "explode";
+            if ("explode".equalsIgnoreCase(current)) {
+                next = "despawn";
+            } else if ("despawn".equalsIgnoreCase(current)) {
+                next = "laser";
+            }
+            pc.setOnHit(next);
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+            plugin.getBdeGuiManager().openProjectileEditor(player, projectileId);
+            return;
+        }
+
+        if (slot == 29) { // Explosion Power
+            double delta = event.getClick().isRightClick() ? -0.5 : 0.5;
+            if (event.isShiftClick()) {
+                delta = event.getClick().isRightClick() ? -0.1 : 0.1;
+            }
+            pc.setExplosionPower(Math.max(0.0, pc.getExplosionPower() + delta));
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.2f);
+            plugin.getBdeGuiManager().openProjectileEditor(player, projectileId);
+            return;
+        }
+
+        if (slot == 30) { // Destroy Blocks toggle
+            pc.setDestroyBlocks(!pc.isDestroyBlocks());
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, pc.isDestroyBlocks() ? 1.5f : 0.8f);
+            plugin.getBdeGuiManager().openProjectileEditor(player, projectileId);
+            return;
+        }
+
+        if (slot == 31) { // Vanilla Explosion Damage toggle
+            pc.setVanillaExplosionDamage(!pc.isVanillaExplosionDamage());
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, pc.isVanillaExplosionDamage() ? 1.5f : 0.8f);
+            plugin.getBdeGuiManager().openProjectileEditor(player, projectileId);
+            return;
+        }
+
+        if (slot == 33) { // Launch Sound prompt
+            player.closeInventory();
+            player.sendMessage("§ePlease type the Launch Sound enum name in chat (e.g. ENTITY_GENERIC_EXPLODE, or 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_PROJECTILE_LAUNCH_SOUND, null, projectileId));
+            return;
+        }
+
+        if (slot == 34) { // Fly Particle prompt
+            player.closeInventory();
+            player.sendMessage("§ePlease type the Fly Particle enum name in chat (e.g. FLAME, DUST, or 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_PROJECTILE_FLY_PARTICLE, null, projectileId));
+            return;
+        }
+
+        if (slot == 35) { // Impact Particle prompt
+            player.closeInventory();
+            player.sendMessage("§ePlease type the Impact Particle enum name in chat (e.g. EXPLOSION, LAVA, or 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_PROJECTILE_IMPACT_PARTICLE, null, projectileId));
+            return;
+        }
+
+        if (slot == 37) { // Lock-On Toggle
+            pc.setLockOn(!pc.isLockOn());
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, pc.isLockOn() ? 1.5f : 0.8f);
+            plugin.getBdeGuiManager().openProjectileEditor(player, projectileId);
+            return;
+        }
+
+        // Lock guidance numeric adjustments
+        if (slot == 38 || slot == 39 || slot == 40) {
+            double delta = event.getClick().isRightClick() ? -5.0 : 5.0;
+            if (event.isShiftClick()) {
+                delta = event.getClick().isRightClick() ? -1.0 : 1.0;
+            }
+
+            if (slot == 38) {
+                pc.setLockRange(Math.max(1.0, pc.getLockRange() + delta));
+            } else if (slot == 39) {
+                pc.setLockAngle(Math.max(0.0, pc.getLockAngle() + delta));
+            } else if (slot == 40) {
+                delta = event.getClick().isRightClick() ? -0.5 : 0.5;
+                if (event.isShiftClick()) {
+                    delta = event.getClick().isRightClick() ? -0.1 : 0.1;
+                }
+                pc.setLockTime(Math.max(0.1, pc.getLockTime() + delta));
+            }
+
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.2f);
+            plugin.getBdeGuiManager().openProjectileEditor(player, projectileId);
+            return;
+        }
+
+        if (slot == 41) { // Edit Base Point
+            player.closeInventory();
+            player.sendMessage("§ePlease type the base point offset as X, Y, Z (decimals allowed, or type 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_PROJECTILE_BASE_POINT, null, projectileId));
+            return;
+        }
+
+        if (slot == 42) { // Edit Direction Vector
+            player.closeInventory();
+            player.sendMessage("§ePlease type the direction vector as X, Y, Z (decimals allowed, or type 'cancel' to exit):");
+            activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_PROJECTILE_DIRECTION_VECTOR, null, projectileId));
+            return;
+        }
+    }
+
+    private void handleSubsystemProjectileOverrideClick(Player player, ModelInstance instance, BdeGuiHolder holder, int slot, ItemStack clickedItem, InventoryClickEvent event) {
+        String modelProjectId = holder.getModelProjectId();
+        if (modelProjectId == null && instance != null) {
+            modelProjectId = instance.getModel().getProjectId();
+        }
+        BdeModel model = null;
+        if (instance != null) {
+            model = instance.getModel();
+        } else if (modelProjectId != null) {
+            try {
+                model = plugin.getModelManager().loadModelSync(modelProjectId);
+            } catch (Exception ex) {
+                player.sendMessage("§cFailed to load model: " + ex.getMessage());
+                player.closeInventory();
+                return;
+            }
+        }
+        if (model == null) {
+            player.closeInventory();
+            return;
+        }
+
+        BdeModel.VehicleConfig cfg = model.getVehicle();
+        if (cfg == null) {
+            player.closeInventory();
+            return;
+        }
+
+        int subIndex = holder.getSubsystemIndex();
+        if (subIndex < 0 || subIndex >= cfg.getSubsystems().size()) {
+            player.closeInventory();
+            return;
+        }
+        BdeModel.SubsystemConfig sub = cfg.getSubsystems().get(subIndex);
+
+        if (slot == 45) { // Back to Subsystem details
+            plugin.getBdeGuiManager().openSubsystemDetailMenu(player, instance, model, modelProjectId, subIndex);
+            return;
+        }
+        if (slot == 49) { // Close
+            player.closeInventory();
+            return;
+        }
+        if (slot == 46) { // Reset overrides
+            sub.setProjectileOverrides(null);
+            if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
+                plugin.getModelManager().saveModelConfig(model);
+            }
+            player.sendMessage("§aProjectile overrides reset to turret defaults.");
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+            plugin.getBdeGuiManager().openSubsystemProjectileOverrideMenu(player, instance, model, modelProjectId, subIndex);
+            return;
+        }
+
+        if (clickedItem.getType() == Material.LIME_DYE || clickedItem.getType() == Material.GRAY_DYE || clickedItem.getType() == Material.GREEN_DYE) {
+            String pId = ChatColor.stripColor(clickedItem.getItemMeta().getDisplayName());
+            if (pId.contains(" (")) {
+                pId = pId.substring(0, pId.indexOf(" (")).trim();
+            }
+            pId = pId.trim();
+
+            List<String> overrides = sub.getProjectileOverrides();
+            if (overrides == null) {
+                overrides = new ArrayList<>();
+            }
+            if (overrides.contains(pId)) {
+                overrides.remove(pId);
+                player.sendMessage("§cRemoved projectile override: " + pId);
+            } else {
+                overrides.add(pId);
+                player.sendMessage("§aAdded projectile override: " + pId);
+            }
+            sub.setProjectileOverrides(overrides.isEmpty() ? null : overrides);
+            
+            if (model.getLocalFilePath() != null && model.isVehicleLibrary()) {
+                plugin.getModelManager().saveModelConfig(model);
+            }
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+            plugin.getBdeGuiManager().openSubsystemProjectileOverrideMenu(player, instance, model, modelProjectId, subIndex);
         }
     }
 }
