@@ -30,6 +30,8 @@ public class SansCraftBDEPlugin extends JavaPlugin {
 
         // Save default configs
         saveDefaultConfig();
+        getConfig().options().copyDefaults(true);
+        saveConfig();
         saveResource("custom_blocks.yml", false);
 
         // Initialize managers
