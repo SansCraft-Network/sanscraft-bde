@@ -511,11 +511,6 @@ public class BDECommand implements CommandExecutor, TabCompleter {
     }
 
     private void handleBlock(CommandSender sender, String[] args) {
-        if (!(sender.hasPermission("sanscraft.bde.block"))) {
-            sender.sendMessage(ChatColor.RED + "You do not have permission to use custom blocks.");
-            return;
-        }
-
         if (args.length < 2) {
             sender.sendMessage(ChatColor.RED + "Usage: /bde block give ... or /bde block link ...");
             return;
@@ -523,6 +518,10 @@ public class BDECommand implements CommandExecutor, TabCompleter {
 
         String action = args[1].toLowerCase();
         if (action.equalsIgnoreCase("give")) {
+            if (!(sender.hasPermission("sanscraft.bde.block.give"))) {
+                sender.sendMessage(ChatColor.RED + "You do not have permission to give custom blocks.");
+                return;
+            }
             if (args.length < 4) {
                 sender.sendMessage(ChatColor.RED + "Usage: /bde block give <player> <custom_block_id> [amount]");
                 return;
@@ -555,6 +554,10 @@ public class BDECommand implements CommandExecutor, TabCompleter {
             target.getInventory().addItem(item);
             sender.sendMessage(ChatColor.GREEN + "Gave " + amount + "x " + config.displayName + " to " + target.getName());
         } else if (action.equalsIgnoreCase("link")) {
+            if (!(sender.hasPermission("sanscraft.bde.block.link"))) {
+                sender.sendMessage(ChatColor.RED + "You do not have permission to link custom blocks.");
+                return;
+            }
             if (!(sender instanceof Player)) {
                 sender.sendMessage(ChatColor.RED + "Only players can link blocks.");
                 return;

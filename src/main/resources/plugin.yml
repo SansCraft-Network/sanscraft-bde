@@ -27,7 +27,8 @@ permissions:
       sanscraft.bde.list: true
       sanscraft.bde.animate: true
       sanscraft.bde.convert: true
-      sanscraft.bde.block: true
+      sanscraft.bde.block.give: true
+      sanscraft.bde.block.link: true
       sanscraft.bde.select: true
       sanscraft.bde.deselect: true
       sanscraft.bde.rotate: true
@@ -62,8 +63,11 @@ permissions:
   sanscraft.bde.convert:
     description: Permission to convert a file to a model
     default: op
-  sanscraft.bde.block:
-    description: Permission to obtain or edit a custom block
+  sanscraft.bde.block.give:
+    description: Permission to obtain a custom block
+    default: op
+  sanscraft.bde.block.link:
+    description: Permission to link a custom block
     default: op
   sanscraft.bde.select:
     description: Permission to select a spawned model
