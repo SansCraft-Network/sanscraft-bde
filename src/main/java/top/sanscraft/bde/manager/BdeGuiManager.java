@@ -274,12 +274,36 @@ public class BdeGuiManager {
                 "§7Passengers: §e" + (instance.getModel().getPassengers() != null ? instance.getModel().getPassengers().size() : 0)
         ));
 
-        inv.setItem(20, createGuiItem(Material.GRASS_BLOCK, "§6Blocks Category Menu", "§7Link this model to a custom block material."));
-        inv.setItem(21, createGuiItem(Material.COMPASS, "§bMovement & Rotation Menu", "§7Adjust translation, yaw, and pitch."));
-        inv.setItem(23, createGuiItem(Material.MINECART, "§eVehicle Config Menu", "§7Enable vehicle mode, cycle types, and edit stats."));
-        inv.setItem(24, createGuiItem(Material.MUSIC_DISC_13, "§dAnimations Menu", "§7Select and control model animations."));
+        boolean canLink = player.hasPermission("sanscraft.bde.block.link");
+        inv.setItem(20, createGuiItem(Material.GRASS_BLOCK,
+                "§6Blocks Category Menu" + (canLink ? "" : " §c[LOCKED]"),
+                canLink ? "§7Link this model to a custom block material." : "§cYou don't have permission to use this."
+        ));
 
-        inv.setItem(40, createGuiItem(Material.LAVA_BUCKET, "§4Despawn Model", "§7Deletes this BDE model from the world."));
+        boolean canMoveOrRotate = player.hasPermission("sanscraft.bde.move") || player.hasPermission("sanscraft.bde.rotate");
+        inv.setItem(21, createGuiItem(Material.COMPASS,
+                "§bMovement & Rotation Menu" + (canMoveOrRotate ? "" : " §c[LOCKED]"),
+                canMoveOrRotate ? "§7Adjust translation, yaw, and pitch." : "§cYou don't have permission to use this."
+        ));
+
+        boolean canVehicle = player.hasPermission("sanscraft.bde.vehicles");
+        inv.setItem(23, createGuiItem(Material.MINECART,
+                "§eVehicle Config Menu" + (canVehicle ? "" : " §c[LOCKED]"),
+                canVehicle ? "§7Enable vehicle mode, cycle types, and edit stats." : "§cYou don't have permission to use this."
+        ));
+
+        boolean canAnimate = player.hasPermission("sanscraft.bde.animate");
+        inv.setItem(24, createGuiItem(Material.MUSIC_DISC_13,
+                "§dAnimations Menu" + (canAnimate ? "" : " §c[LOCKED]"),
+                canAnimate ? "§7Select and control model animations." : "§cYou don't have permission to use this."
+        ));
+
+        boolean canDespawn = player.hasPermission("sanscraft.bde.remove");
+        inv.setItem(40, createGuiItem(Material.LAVA_BUCKET,
+                "§4Despawn Model" + (canDespawn ? "" : " §c[LOCKED]"),
+                canDespawn ? "§7Deletes this BDE model from the world." : "§cYou don't have permission to use this."
+        ));
+
         inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
 
         player.openInventory(inv);
@@ -330,6 +354,26 @@ public class BdeGuiManager {
 
         inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Main Menu"));
         inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
+
+        boolean canMove = player.hasPermission("sanscraft.bde.move");
+        boolean canRotate = player.hasPermission("sanscraft.bde.rotate");
+
+        int[] moveSlots = {19, 20, 21, 23, 24, 25};
+        int[] rotationSlots = {29, 30, 32, 33, 38, 39, 41, 42};
+
+        if (!canMove) {
+            ItemStack lockedMove = createGuiItem(Material.BARRIER, "§cMovement Locked", "§7You don't have permission to move models.");
+            for (int slot : moveSlots) {
+                inv.setItem(slot, lockedMove);
+            }
+        }
+
+        if (!canRotate) {
+            ItemStack lockedRotate = createGuiItem(Material.BARRIER, "§cRotation Locked", "§7You don't have permission to rotate models.");
+            for (int slot : rotationSlots) {
+                inv.setItem(slot, lockedRotate);
+            }
+        }
 
         player.openInventory(inv);
     }
