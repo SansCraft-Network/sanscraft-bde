@@ -54,6 +54,7 @@ public class SansCraftBDEPlugin extends JavaPlugin {
 
         getServer().getPluginManager().registerEvents(new CustomBlockListener(this), this);
         getServer().getPluginManager().registerEvents(new top.sanscraft.bde.listener.BdeGuiListener(this), this);
+        getServer().getPluginManager().registerEvents(new top.sanscraft.bde.listener.PlayerExplosionListener(this), this);
 
         getLogger().info("SansCraftBDE has been enabled successfully!");
     }

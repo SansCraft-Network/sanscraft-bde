@@ -36,6 +36,7 @@ permissions:
       sanscraft.bde.traction: true
       sanscraft.bde.debug: true
       sanscraft.bde.test_transform: true
+      sanscraft.bde.projectiles.break: true
   sanscraft.bde:
     description: Permission to use the core command for block display engine
     default: op
@@ -89,4 +90,7 @@ permissions:
     default: op
   sanscraft.bde.test_transform:
     description: Permission to run test_transform
+    default: op
+  sanscraft.bde.projectiles.break:
+    description: Permission to break blocks with projectiles that have block destruction enabled
     default: op
