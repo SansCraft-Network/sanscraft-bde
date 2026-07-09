@@ -20,9 +20,15 @@ SansCraftBDE is a high-performance Paper/Spigot plugin that introduces detailed 
   - [Custom Block Commands](#custom-block-commands)
 - [Physical Vehicle Engine](#physical-vehicle-engine)
   - [Steering & Physics Stats](#steering--physics-stats)
+  - [Block Traction & Drift Dynamics](#block-traction--drift-dynamics)
   - [Seat Configurations & GUI Editor](#seat-configurations--gui-editor)
   - [Catalog GUI & Spawning Logic](#catalog-gui--spawning-logic)
+- [Subsystems & Modular Configurations](#subsystems--modular-configurations)
+  - [Turret Configurations](#turret-configurations)
+  - [Projectile Configurations](#projectile-configurations)
+  - [Player Explosion Events & Protection Compatibility](#player-explosion-events--protection-compatibility)
 - [Command Reference](#command-reference)
+- [Permissions Reference](#permissions-reference)
 - [Configuration Templates](#configuration-templates)
   - [`config.yml`](#configyml)
   - [`custom_blocks.yml`](#custom_blocksyml)
@@ -130,8 +136,15 @@ SansCraftBDE includes a complete, high-performance vehicle simulation engine des
   - `deceleration` (blocks/tick²): Friction/braking slowing rate.
   - `reverse_speed` (blocks/tick): Maximum backward driving velocity.
   - `turn_speed` (degrees/tick): Maximum angular steering yaw velocity.
+  - `traction` (multiplier): Base traction multiplier adjusting drift intensity (defaults to `1.0`).
 - **Floor Alignment**: The engine automatically detects the ground height beneath the vehicle, ensuring smooth climbing over slabs, stairs, and slopes.
 - **Model Yaw Alignment**: When driving, model yaw rotations are applied inside the display transformation matrices, which are smoothly interpolated on the client side at high frame rates.
+
+### Block Traction & Drift Dynamics
+
+SansCraftBDE integrates physical traction overrides based on the ground block material beneath the vehicle center:
+- **Traction Multipliers**: Defined globally in `config.yml` under `block-traction` (e.g., `BLUE_ICE: 0.02`, `SLIME_BLOCK: 0.2`, `SOUL_SAND: 0.4`). Lower values cause vehicles to drift significantly when turning, while values close to `1.0` provide sharp, responsive steering.
+- **Traction Editing**: Adjust global block traction overrides via `/bde traction` or customize per-vehicle traction settings directly through the `/bde gui` dashboard.
 
 ### Seat Configurations & GUI Editor
 
@@ -153,15 +166,84 @@ Spawning vehicles from the catalog (`/bde vehicles`) includes alignment features
 
 ---
 
+## Subsystems & Modular Configurations
+
+Modern updates introduce **Subsystems** (such as Turrets and Projectiles) that can be mounted to BDE vehicles or deployed independently. Subsystem properties are stored as standalone templates under the `plugins/SansCraftBDE/turrets/` and `plugins/SansCraftBDE/projectiles/` folders, enabling configurations to be loaded, edited, and shared dynamically.
+
+### Turret Configurations
+
+Turrets represent rotatable component assemblies mounted to vehicle sockets or placed statically. Turret templates are loaded from JSON files located in the `turrets/` directory.
+
+Example turret template (`turrets/heavy_mortar.json`):
+```json
+{
+  "name": "Heavy Mortar",
+  "bdeModelId": "mortar_turret",
+  "pivotOffset": [0.0, 1.5, -0.2],
+  "launchOffset": [0.0, 1.8, 1.2],
+  "cameraOffset": [0.0, 2.2, -1.8],
+  "fovMinYaw": -120.0,
+  "fovMaxYaw": 120.0,
+  "fovMinPitch": -10.0,
+  "fovMaxPitch": 50.0,
+  "displayTag": "subsystem_turret_mortar",
+  "projectileIds": [
+    "mortar_shell",
+    "emp_shell"
+  ]
+}
+```
+
+### Projectile Configurations
+
+Projectiles represent custom physical projectiles shot from turret and vehicle weapons. Projectile templates are loaded from JSON files in the `projectiles/` directory.
+
+Example projectile template (`projectiles/mortar_shell.json`):
+```json
+{
+  "name": "Mortar Shell",
+  "bdeModelId": "shell_projectile",
+  "damage": 15.0,
+  "speed": 1.2,
+  "cooldown": 2.0,
+  "hasGravity": true,
+  "onHit": "explode",
+  "explosionPower": 4.0,
+  "destroyBlocks": true,
+  "vanillaExplosionDamage": true,
+  "lockOn": false,
+  "lockRange": 0.0,
+  "lockAngle": 0.0,
+  "lockTime": 0.0,
+  "basePoint": [0.0, 0.0, 0.0],
+  "directionVector": [0.0, 0.0, 1.0],
+  "launchSound": "ENTITY_GENERIC_EXPLODE",
+  "flyParticle": "SMOKE_NORMAL",
+  "impactParticle": "EXPLOSION_HUGE"
+}
+```
+
+### Player Explosion Events & Protection Compatibility
+
+When a projectile with `destroyBlocks: true` hits a target and triggers an explosion, SansCraftBDE automatically validates block destruction through a custom event-routing layer:
+1. **Shooter Ownership Mapping**: The plugin resolves the Player who shot the projectile and tags them as the owner of the explosion.
+2. **Permission Check**: If the shooter is offline or lacks the `sanscraft.bde.projectiles.break` permission node, the block list is cleared and block destruction is cancelled.
+3. **Custom Event Dispatch**: A custom `PlayerExplosionEvent` is fired with the shooter player context, explosion yield, and list of affected blocks.
+4. **Third-Party Integrations**: Third-party plugins (like WorldGuard, Towny, and GriefPrevention) intercept standard bukkit events containing this player metadata, providing out-of-the-box protection validation and preventing players from bypass-griefing claims.
+
+---
+
+---
+
 ## Command Reference
 
-All sub-command permissions are included in the `sanscraft.bde.admin` permission.
-
-| Command                   | Arguments                                              | Permission                 | Description                                                                                                                                                                               |
+All sub-command permissions are included in the `sanscraft.bde.admin` permissi| Command                   | Arguments                                              | Permission                 | Description                                                                                                                                                                               |
 |---------------------------|--------------------------------------------------------|----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `/bde`                    | *(None)*                                               | `sanscraft.bde`            | Lists all sub-commands.                                                                                                                                                                   |
 | `/bde spawn`              | `<model_id> [scale] [x] [y] [z] [yaw] [flags]`         | `sanscraft.bde.spawn`      | Spawns a BDE model instance at the designated coordinates. Supports `~` relative coords. Flags: `simple` (cardinal snaps & level pitch), `onground` (snaps bounding box bottom to floor). |
 | `/bde vehicles`           | *(None)*                                               | `sanscraft.bde.vehicles`   | Opens the vehicle catalog folder explorer interface.                                                                                                                                      |
+| `/bde turrets`            | *(None)*                                               | `sanscraft.bde.vehicles`   | Opens the turret catalog/library GUI directory.                                                                                                                                           |
+| `/bde projectiles`        | *(None)*                                               | `sanscraft.bde.vehicles`   | Opens the projectile catalog/library GUI directory.                                                                                                                                       |
 | `/bde gui`                | *(None)*                                               | `sanscraft.bde.gui`        | Opens the configuration dashboard for the currently selected model.                                                                                                                       |
 | `/bde select`             | *(None)*                                               | `sanscraft.bde.select`     | Selects the nearest spawned model instance within 6 blocks.                                                                                                                               |
 | `/bde clear` / `deselect` | *(None)*                                               | `sanscraft.bde.deselect`   | Clears the current model selection.                                                                                                                                                       |
@@ -173,7 +255,41 @@ All sub-command permissions are included in the `sanscraft.bde.admin` permission
 | `/bde convert`            | `<format> <file> [density] [size_blocks] [entity_cap]` | `sanscraft.bde.convert`    | Converts an external 3D model into BDE JSON format.                                                                                                                                       |
 | `/bde block give`         | `<player> <block_id> [amount]`                         | `sanscraft.bde.block.give` | Gives the specified player a custom block placement item.                                                                                                                                 |
 | `/bde block link`         | `<custom_block_id>`                                    | `sanscraft.bde.block.link` | Converts the item in hand into a custom block placing item.                                                                                                                               |
+| `/bde traction`           | *(None)*                                               | `sanscraft.bde.spawn`      | Opens the global block traction overrides editor GUI.                                                                                                                                     |
+| `/bde turret`             | `<list\|load\|create\|edit\|save\|gui> [args...]`      | `sanscraft.bde.gui`        | Manages external turret template configurations via commands or GUI dashboard.                                                                                                            |
+| `/bde projectile`         | `<list\|load\|create\|edit\|save\|gui> [args...]`      | `sanscraft.bde.gui`        | Manages external projectile template configurations via commands or GUI dashboard.                                                                                                        |
 | `/bde debug`              | `[vehicles\|steering]`                                 | `sanscraft.bde.debug`      | Toggles verbose diagnostic logging in the server console.                                                                                                                                 |
+| `/bde test_transform`     | `<set\|animate\|stop\|reset\|status\|clear> [args...]`  | `sanscraft.bde.test_transform`| Opens debug rendering markers and runs relative transformations testing for subsystems.                                                                                                  |
+| `/lock`                   | `<x\|y\|z>`                                            | `sanscraft.bde.lock`       | Toggles coordinate lock axis locks during interactive GUI seat/subsystem placements.                                                                                                      |
+
+---
+
+## Permissions Reference
+
+SansCraftBDE features fine-grained permissions controlling command execution, GUI configurations, block placement, and projectile interactions.
+
+| Permission Node | Default | Description |
+| --- | --- | --- |
+| `sanscraft.bde.admin` | `op` | Wildcard permission granting access to all administrative commands and configurations. |
+| `sanscraft.bde` | `op` | Allows basic usage of the core `/bde` command. |
+| `sanscraft.bde.lock` | `op` | Allows players to use the axis coordination `/lock` command during subsystem/seat placements. |
+| `sanscraft.bde.spawn` | `op` | Allows spawning BDE models using `/bde spawn` or the global traction menu `/bde traction`. |
+| `sanscraft.bde.vehicles` | `op` | Allows opening the folder explorer catalogs for vehicles, turrets, and projectiles. |
+| `sanscraft.bde.move` | `op` | Allows moving BDE models relative to current locations with `/bde move`. |
+| `sanscraft.bde.remove` | `op` | Allows deleting active model instances using `/bde remove`. |
+| `sanscraft.bde.list` | `op` | Allows listing all active spawned models on the server. |
+| `sanscraft.bde.animate` | `op` | Allows managing/playing model keyframe animations with `/bde anim`. |
+| `sanscraft.bde.convert` | `op` | Allows running conversion commands (`/bde convert`) to voxelize and optimize models. |
+| `sanscraft.bde.block.give` | `op` | Allows obtaining custom block placement items using `/bde block give`. |
+| `sanscraft.bde.block.link` | `op` | Allows linking standard items to custom placement tools using `/bde block link`. |
+| `sanscraft.bde.select` | `op` | Allows selecting nearby model instances in-game for editing. |
+| `sanscraft.bde.deselect` | `op` | Allows clearing the currently active model selection. |
+| `sanscraft.bde.rotate` | `op` | Allows rotating a selected model instance via `/bde rotate`. |
+| `sanscraft.bde.gui` | `op` | Allows opening the in-game GUI dashboard to edit coordinates, seats, and subsystems. |
+| `sanscraft.bde.traction` | `op` | Allows configuring global block traction overrides. |
+| `sanscraft.bde.debug` | `op` | Allows toggling verbose diagnostic debugging console messages. |
+| `sanscraft.bde.test_transform` | `op` | Allows running the `/bde test_transform` subsystem debug utility. |
+| `sanscraft.bde.projectiles.break` | `op` | Allows projectiles shot by the player to damage/break blocks (respecting region protections). |
 
 ---
 
@@ -215,6 +331,14 @@ blockbench:
 gui:
   # The item used to select and edit BDE models in-game
   selector-tool: "BLAZE_ROD"
+
+# Default Block Traction Values (0.0 = no traction/fully slippery/infinite drift, 1.0 = perfect traction/instant turns)
+block-traction:
+  BLUE_ICE: 0.02
+  PACKED_ICE: 0.05
+  ICE: 0.1
+  SLIME_BLOCK: 0.2
+  SOUL_SAND: 0.4
 ```
 
 ### `custom_blocks.yml`
