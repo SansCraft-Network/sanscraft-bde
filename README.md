@@ -155,24 +155,25 @@ Spawning vehicles from the catalog (`/bde vehicles`) includes alignment features
 
 ## Command Reference
 
-All subcommands require the `sanscraft.bde.admin` permission.
+All sub-command permissions are included in the `sanscraft.bde.admin` permission.
 
-| Command | Arguments | Description |
-| --- | --- | --- |
-| `/bde spawn` | `<model_id> [scale] [x] [y] [z] [yaw] [flags]` | Spawns a BDE model instance at the designated coordinates. Supports `~` relative coords. Flags: `simple` (cardinal snaps & level pitch), `onground` (snaps bounding box bottom to floor). |
-| `/bde vehicles` | *(None)* | Opens the vehicle catalog folder explorer interface. |
-| `/bde gui` | *(None)* | Opens the configuration dashboard for the currently selected model. |
-| `/bde select` | *(None)* | Selects the nearest spawned model instance within 6 blocks. |
-| `/bde clear` / `deselect` | *(None)* | Clears the current model selection. |
-| `/bde remove` | *(None)* | Permanently deletes the nearest spawned model instance. |
-| `/bde move` | `<x> <y> <z> [yaw]` | Relocates the selected model by a relative coordinate offset. |
-| `/bde rotate` | `<yaw_degrees>` | Rotates the selected model by a relative yaw offset. |
-| `/bde list` | *(None)* | Outputs a list of all active spawned model instances. |
-| `/bde anim` | `<play\|stop\|pause\|resume\|speed> [name/speed]` | Manages model animations. |
-| `/bde convert` | `<format> <file> [density] [size_blocks] [entity_cap]`| Converts an external 3D model into BDE JSON format. |
-| `/bde block give` | `<player> <block_id> [amount]` | Gives the specified player a custom block placement item. |
-| `/bde block link` | `<custom_block_id>` | Converts the item in hand into a custom block placing item. |
-| `/bde debug` | `[vehicles\|steering]` | Toggles verbose diagnostic logging in the server console. |
+| Command                   | Arguments                                              | Permission                 | Description                                                                                                                                                                               |
+|---------------------------|--------------------------------------------------------|----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `/bde`                    | *(None)*                                               | `sanscraft.bde`            | Lists all sub-commands.                                                                                                                                                                   |
+| `/bde spawn`              | `<model_id> [scale] [x] [y] [z] [yaw] [flags]`         | `sanscraft.bde.spawn`      | Spawns a BDE model instance at the designated coordinates. Supports `~` relative coords. Flags: `simple` (cardinal snaps & level pitch), `onground` (snaps bounding box bottom to floor). |
+| `/bde vehicles`           | *(None)*                                               | `sanscraft.bde.vehicles`   | Opens the vehicle catalog folder explorer interface.                                                                                                                                      |
+| `/bde gui`                | *(None)*                                               | `sanscraft.bde.gui`        | Opens the configuration dashboard for the currently selected model.                                                                                                                       |
+| `/bde select`             | *(None)*                                               | `sanscraft.bde.select`     | Selects the nearest spawned model instance within 6 blocks.                                                                                                                               |
+| `/bde clear` / `deselect` | *(None)*                                               | `sanscraft.bde.deselect`   | Clears the current model selection.                                                                                                                                                       |
+| `/bde remove`             | *(None)*                                               | `sanscraft.bde.remove`     | Permanently deletes the nearest spawned model instance.                                                                                                                                   |
+| `/bde move`               | `<x> <y> <z> [yaw]`                                    | `sanscraft.bde.move`       | Relocates the selected model by a relative coordinate offset.                                                                                                                             |
+| `/bde rotate`             | `<yaw_degrees>`                                        | `sanscraft.bde.rotate`     | Rotates the selected model by a relative yaw offset.                                                                                                                                      |
+| `/bde list`               | *(None)*                                               | `sanscraft.bde.list`       | Outputs a list of all active spawned model instances.                                                                                                                                     |
+| `/bde anim`               | `<play\|stop\|pause\|resume\|speed> [name/speed]`      | `sanscraft.bde.animate`    | Manages model animations.                                                                                                                                                                 |
+| `/bde convert`            | `<format> <file> [density] [size_blocks] [entity_cap]` | `sanscraft.bde.convert`    | Converts an external 3D model into BDE JSON format.                                                                                                                                       |
+| `/bde block give`         | `<player> <block_id> [amount]`                         | `sanscraft.bde.block.give` | Gives the specified player a custom block placement item.                                                                                                                                 |
+| `/bde block link`         | `<custom_block_id>`                                    | `sanscraft.bde.block.link` | Converts the item in hand into a custom block placing item.                                                                                                                               |
+| `/bde debug`              | `[vehicles\|steering]`                                 | `sanscraft.bde.debug`      | Toggles verbose diagnostic logging in the server console.                                                                                                                                 |
 
 ---
 
@@ -187,6 +188,12 @@ api-endpoint: "https://block-display.com/server-api/"
 
 # How long to cache downloaded models locally in minutes (1440 = 24 hours)
 cache-duration-minutes: 1440
+
+# Whether to delete all spawned models when the server shuts down.
+# If false, the models will persist across restarts, but they will become
+# unselectable, non-functional, and non-deletable via the BDE plugin.
+# You will need another plugin (i.e. EasyArmorStands) to select and delete models.
+cleanup-models-on-shutdown: true
 
 # Voxel conversion defaults
 voxels:

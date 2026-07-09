@@ -35,6 +35,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public class BdeGuiListener implements Listener {
@@ -119,10 +120,18 @@ public class BdeGuiListener implements Listener {
                     player.sendMessage("§aDeselected BDE model.");
                 } else {
                     // Already selected, open GUI
+                    if (!player.hasPermission("sanscraft.bde.gui")) {
+                        player.sendMessage("§cYou don't have permission to open the GUI.");
+                        return;
+                    }
                     plugin.getBdeGuiManager().openMainMenu(player, instance);
                 }
             } else {
                 // Select and highlight
+                if (!player.hasPermission("sanscraft.bde.select")) {
+                    player.sendMessage("§cYou don't have permission to select models.");
+                    return;
+                }
                 plugin.getBdeGuiManager().selectModel(player, instance.getId());
             }
         } else {
@@ -245,18 +254,39 @@ public class BdeGuiListener implements Listener {
                 player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.0f);
                 break;
             case 21: // Movement & Rotation
+                boolean canMoveOrRotate = player.hasPermission("sanscraft.bde.move") || player.hasPermission("sanscraft.bde.rotate");
+                if (!canMoveOrRotate) {
+                    player.sendMessage("§cYou do not have permission to move or rotate models.");
+                    player.playSound(player.getLocation(), Sound.ENTITY_VILLAGER_NO, 1.0f, 1.0f);
+                    return;
+                }
                 plugin.getBdeGuiManager().openMovementMenu(player, instance);
                 player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.0f);
                 break;
             case 23: // Vehicle Config
+                if (!player.hasPermission("sanscraft.bde.vehicles")) {
+                    player.sendMessage("§cYou do not have permission to use vehicles.");
+                    player.playSound(player.getLocation(), Sound.ENTITY_VILLAGER_NO, 1.0f, 1.0f);
+                    return;
+                }
                 plugin.getBdeGuiManager().openVehicleMenu(player, instance);
                 player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.0f);
                 break;
             case 24: // Animations
+                if (!player.hasPermission("sanscraft.bde.animate")) {
+                    player.sendMessage("§cYou do not have permission to use animations.");
+                    player.playSound(player.getLocation(), Sound.ENTITY_VILLAGER_NO, 1.0f, 1.0f);
+                    return;
+                }
                 plugin.getBdeGuiManager().openAnimationsMenu(player, instance);
                 player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.0f);
                 break;
             case 40: // Despawn Model
+                if (!player.hasPermission("sanscraft.bde.remove")) {
+                    player.sendMessage("§cYou do not have permission to despawn models.");
+                    player.playSound(player.getLocation(), Sound.ENTITY_VILLAGER_NO, 1.0f, 1.0f);
+                    return;
+                }
                 plugin.getBdeGuiManager().clearSelection(player.getUniqueId());
                 plugin.getModelManager().removeInstance(instance.getId());
                 player.closeInventory();
@@ -272,6 +302,21 @@ public class BdeGuiListener implements Listener {
     private void handleMovementMenuClick(Player player, ModelInstance instance, int slot, boolean isShift) {
         if (instance == null) {
             player.closeInventory();
+            return;
+        }
+
+        Set<Integer> moveSlots = Set.of(19, 20, 21, 23, 24, 25);
+        Set<Integer> rotateSlots = Set.of(29, 30, 32, 33, 38, 39, 41, 42);
+
+        if (moveSlots.contains(slot) && !player.hasPermission("sanscraft.bde.move")) {
+            player.sendMessage("§cYou don't have permission to move models.");
+            player.playSound(player.getLocation(), Sound.ENTITY_VILLAGER_NO, 1.0f, 1.0f);
+            return;
+        }
+
+        if (rotateSlots.contains(slot) && !player.hasPermission("sanscraft.bde.rotate")) {
+            player.sendMessage("§cYou don't have permission to rotate models.");
+            player.playSound(player.getLocation(), Sound.ENTITY_VILLAGER_NO, 1.0f, 1.0f);
             return;
         }
 
