@@ -233,11 +233,11 @@ When a projectile with `destroyBlocks: true` hits a target and triggers an explo
 
 ---
 
----
-
 ## Command Reference
 
-All sub-command permissions are included in the `sanscraft.bde.admin` permissi| Command                   | Arguments                                              | Permission                 | Description                                                                                                                                                                               |
+All sub-command permissions are included in the `sanscraft.bde.admin` permission.
+
+| Command                   | Arguments                                              | Permission                 | Description                                                                                                                                                                               |
 |---------------------------|--------------------------------------------------------|----------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `/bde`                    | *(None)*                                               | `sanscraft.bde`            | Lists all sub-commands.                                                                                                                                                                   |
 | `/bde spawn`              | `<model_id> [scale] [x] [y] [z] [yaw] [flags]`         | `sanscraft.bde.spawn`      | Spawns a BDE model instance at the designated coordinates. Supports `~` relative coords. Flags: `simple` (cardinal snaps & level pitch), `onground` (snaps bounding box bottom to floor). |
