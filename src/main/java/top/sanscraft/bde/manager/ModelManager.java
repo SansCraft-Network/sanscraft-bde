@@ -909,26 +909,24 @@ public class ModelManager {
      * Determines if an SNBT passenger string describes an item_display entity.
      */
     private static boolean isItemDisplaySnbt(String snbt) {
-        // Check for id:"minecraft:item_display" or id:item_display
-        return snbt.contains("id:\"minecraft:item_display\"") ||
-               snbt.contains("id:item_display") ||
-               snbt.contains("id:'minecraft:item_display'") ||
-               snbt.contains("id:\"item_display\"");
+        String clean = snbt.replaceAll("\\s", "");
+        return clean.contains("id:\"minecraft:item_display\"") ||
+               clean.contains("id:item_display") ||
+               clean.contains("id:'minecraft:item_display'") ||
+               clean.contains("id:\"item_display\"");
     }
 
     private static boolean isTextDisplaySnbt(String snbt) {
-        return snbt.contains("id:\"minecraft:text_display\"") ||
-               snbt.contains("id:text_display") ||
-               snbt.contains("id:'minecraft:text_display'") ||
-               snbt.contains("id:\"text_display\"");
+        String clean = snbt.replaceAll("\\s", "");
+        return clean.contains("id:\"minecraft:text_display\"") ||
+               clean.contains("id:text_display") ||
+               clean.contains("id:'minecraft:text_display'") ||
+               clean.contains("id:\"text_display\"");
     }
 
     private void applyTextDisplayData(TextDisplay display, String snbt) {
         // Extract and set text
-        String textJson = extractSnbtString(snbt, "text:'");
-        if (textJson == null) {
-            textJson = extractSnbtString(snbt, "text:\"");
-        }
+        String textJson = extractKeyString(snbt, "text", 0);
 
         if (textJson != null) {
             try {
@@ -964,10 +962,7 @@ public class ModelManager {
         }
 
         // Alignment
-        String alignment = extractSnbtString(snbt, "alignment:\"");
-        if (alignment == null) {
-            alignment = extractSnbtString(snbt, "alignment:'");
-        }
+        String alignment = extractKeyString(snbt, "alignment", 0);
         if (alignment != null) {
             try {
                 display.setAlignment(TextDisplay.TextAlignment.valueOf(alignment.toUpperCase()));
@@ -1038,11 +1033,8 @@ public class ModelManager {
         // Parse the item id from SNBT:
         // item:{id:"minecraft:diamond_sword",Count:1b,tag:{CustomModelData:12345}}
         // or item:{id:"minecraft:paper",count:1,components:{"minecraft:custom_model_data":12345}}
-        String itemId = extractSnbtString(snbt, "item:{id:\"");
-        if (itemId == null) {
-            // Try alternate format: item:{id:"..."
-            itemId = extractSnbtString(snbt, "item:{id:\"");
-        }
+        int itemIdx = snbt.indexOf("item");
+        String itemId = (itemIdx != -1) ? extractKeyString(snbt, "id", itemIdx) : null;
 
         Material material = Material.PAPER; // default fallback
         if (itemId != null) {
@@ -1133,7 +1125,7 @@ public class ModelManager {
         display.setItemStack(stack);
 
         // Parse item display transform mode (e.g., head, thirdperson_righthand, fixed, etc.)
-        String transformMode = extractSnbtString(snbt, "item_display:\"");
+        String transformMode = extractKeyString(snbt, "item_display", 0);
         if (transformMode != null) {
             try {
                 display.setItemDisplayTransform(
@@ -1143,16 +1135,47 @@ public class ModelManager {
     }
 
     /**
-     * Extracts a quoted string value after the given prefix in SNBT.
-     * e.g., extractSnbtString(snbt, "id:\"") returns "minecraft:paper" from id:"minecraft:paper"
+     * Extracts a quoted string value for a key in SNBT, tolerating spaces and backslash escapes.
      */
-    private String extractSnbtString(String snbt, String prefix) {
-        int idx = snbt.indexOf(prefix);
+    private String extractKeyString(String snbt, String key, int startFrom) {
+        int idx = snbt.indexOf(key, startFrom);
         if (idx == -1) return null;
-        int start = idx + prefix.length();
-        int end = snbt.indexOf("\"", start);
-        if (end == -1) return null;
-        return snbt.substring(start, end);
+
+        int colon = snbt.indexOf(":", idx + key.length());
+        if (colon == -1) return null;
+
+        // Find the opening quote character (' or ") after the colon
+        int startQuote = -1;
+        char quote = 0;
+        for (int i = colon + 1; i < snbt.length(); i++) {
+            char c = snbt.charAt(i);
+            if (c == '\'' || c == '"') {
+                startQuote = i;
+                quote = c;
+                break;
+            }
+            if (c == ',' || c == '}' || c == ']') break;
+        }
+
+        if (startQuote == -1) return null;
+
+        // Read until the matching closing quote, respecting backslash escapes
+        StringBuilder sb = new StringBuilder();
+        boolean escaped = false;
+        for (int i = startQuote + 1; i < snbt.length(); i++) {
+            char c = snbt.charAt(i);
+            if (escaped) {
+                sb.append(c);
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == quote) {
+                return sb.toString();
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     /**
