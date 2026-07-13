@@ -814,7 +814,7 @@ public class BDECommand implements CommandExecutor, TabCompleter {
         }
 
         if (args.length < 2) {
-            sender.sendMessage(ChatColor.RED + "Usage: /bde ammo <gui|reload>");
+            sender.sendMessage(ChatColor.RED + "Usage: /bde ammo <gui|reload|set|add|remove|type|max>");
             return;
         }
 
@@ -827,12 +827,82 @@ public class BDECommand implements CommandExecutor, TabCompleter {
                 break;
             case "reload":
                 plugin.getBdeAmmoConfig().loadAmmo();
-                player.sendMessage(ChatColor.GREEN + "Reloaded ammo.yml successfully. " + plugin.getBdeAmmoConfig().getRegisteredAmmo().size() + " ammo types registered.");
+                player.sendMessage(ChatColor.GREEN + "Reloaded ammo.yml. " + plugin.getBdeAmmoConfig().getBoxes().size() + " ammo box types defined.");
+                break;
+            case "set":
+            case "add":
+            case "remove":
+                handleAmmoCurrent(player, action, args);
+                break;
+            case "type":
+                handleAmmoType(player, args);
+                break;
+            case "max":
+                handleAmmoMax(player, args);
                 break;
             default:
-                player.sendMessage(ChatColor.RED + "Unknown ammo action: " + action + ". Use gui or reload.");
+                player.sendMessage(ChatColor.RED + "Unknown ammo action: " + action + ". Use gui, reload, set, add, remove, type, or max.");
                 break;
         }
+    }
+
+    /** Ammo box held in main hand, or null (with an error message) if not holding one. */
+    private org.bukkit.inventory.ItemStack heldAmmoBox(Player player) {
+        org.bukkit.inventory.ItemStack hand = player.getInventory().getItemInMainHand();
+        if (!plugin.getAmmoBoxItems().isAmmoBox(hand)) {
+            player.sendMessage(ChatColor.RED + "Hold an ammo box in your main hand first.");
+            return null;
+        }
+        return hand;
+    }
+
+    private void handleAmmoCurrent(Player player, String action, String[] args) {
+        if (args.length < 3) { player.sendMessage(ChatColor.RED + "Usage: /bde ammo " + action + " <amount>"); return; }
+        org.bukkit.inventory.ItemStack box = heldAmmoBox(player);
+        if (box == null) return;
+        int amount;
+        try { amount = Integer.parseInt(args[2]); } catch (NumberFormatException e) { player.sendMessage(ChatColor.RED + "Amount must be a number."); return; }
+
+        top.sanscraft.bde.manager.AmmoBoxItems items = plugin.getAmmoBoxItems();
+        int current = items.getCurrent(box);
+        int next;
+        switch (action) {
+            case "add": next = current + amount; break;
+            case "remove": next = current - amount; break;
+            default: next = amount; break; // set
+        }
+        // Admin override: current may exceed max on purpose.
+        items.setCurrent(box, Math.max(0, next));
+        player.sendMessage(ChatColor.GREEN + "Ammo box now holds " + items.getCurrent(box) + " (max " + items.getMax(box) + ").");
+    }
+
+    private void handleAmmoType(Player player, String[] args) {
+        if (args.length < 3) { player.sendMessage(ChatColor.RED + "Usage: /bde ammo type <ammoType>"); return; }
+        org.bukkit.inventory.ItemStack box = heldAmmoBox(player);
+        if (box == null) return;
+        plugin.getAmmoBoxItems().setSuppliedType(box, args[2]);
+        player.sendMessage(ChatColor.GREEN + "Ammo box now supplies type: " + args[2]);
+    }
+
+    private void handleAmmoMax(Player player, String[] args) {
+        if (args.length < 4) { player.sendMessage(ChatColor.RED + "Usage: /bde ammo max <set|add|remove> <amount>"); return; }
+        org.bukkit.inventory.ItemStack box = heldAmmoBox(player);
+        if (box == null) return;
+        String op = args[2].toLowerCase();
+        int amount;
+        try { amount = Integer.parseInt(args[3]); } catch (NumberFormatException e) { player.sendMessage(ChatColor.RED + "Amount must be a number."); return; }
+
+        top.sanscraft.bde.manager.AmmoBoxItems items = plugin.getAmmoBoxItems();
+        int max = items.getMax(box);
+        int next;
+        switch (op) {
+            case "add": next = max + amount; break;
+            case "remove": next = max - amount; break;
+            case "set": next = amount; break;
+            default: player.sendMessage(ChatColor.RED + "Use set, add, or remove."); return;
+        }
+        items.setMax(box, Math.max(1, next));
+        player.sendMessage(ChatColor.GREEN + "Ammo box max capacity is now " + items.getMax(box) + ".");
     }
 
     private void handleLink(CommandSender sender, String[] args) {
@@ -934,8 +1004,11 @@ public class BDECommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(ChatColor.YELLOW + "/bde projectile <list|load|create|edit|save|gui> ... §7- Manage projectile templates");
         sender.sendMessage(ChatColor.YELLOW + "/bde repair gui §7- Opens the repair tools configuration GUI");
         sender.sendMessage(ChatColor.YELLOW + "/bde repair reload §7- Reloads repairs.yml");
-        sender.sendMessage(ChatColor.YELLOW + "/bde ammo gui §7- Opens the ammo registry GUI");
+        sender.sendMessage(ChatColor.YELLOW + "/bde ammo gui §7- Opens the ammo box configuration GUI");
         sender.sendMessage(ChatColor.YELLOW + "/bde ammo reload §7- Reloads ammo.yml");
+        sender.sendMessage(ChatColor.YELLOW + "/bde ammo set|add|remove <n> §7- Modify current ammo of held box");
+        sender.sendMessage(ChatColor.YELLOW + "/bde ammo max set|add|remove <n> §7- Modify max capacity of held box");
+        sender.sendMessage(ChatColor.YELLOW + "/bde ammo type <type> §7- Set the ammo type the held box supplies");
         sender.sendMessage(ChatColor.YELLOW + "/bde link <modelId> [maxUses] §7- Links held item to spawn a vehicle (default 1 use, -1 for infinite)");
     }
 
@@ -987,7 +1060,7 @@ public class BDECommand implements CommandExecutor, TabCompleter {
                 return filter(Arrays.asList("gui", "reload"), args[1]);
             }
             if (subcommand.equals("ammo")) {
-                return filter(Arrays.asList("gui", "reload"), args[1]);
+                return filter(Arrays.asList("gui", "reload", "set", "add", "remove", "type", "max"), args[1]);
             }
             if (subcommand.equals("link")) {
                 List<String> list = new ArrayList<>();

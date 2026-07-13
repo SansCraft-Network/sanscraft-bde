@@ -3465,26 +3465,21 @@ public class ModelManager {
             return;
         }
 
-        // Ammo requirement check & consumption (issue #6).
-        // Draws from the turret's private storage first, then the vehicle-shared pool.
-        // If the weapon mode has no ammoType configured, it fires freely (backward compatible).
-        String ammoTypeId = config.getAmmoType();
-        if (ammoTypeId != null && plugin.getBdeAmmoInventoryManager() != null) {
-            top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig ammo =
-                    plugin.getBdeAmmoConfig().getRegisteredAmmo().get(ammoTypeId);
-            // Fail open only if the referenced ammo type was removed from the registry.
-            if (ammo != null) {
-                int subIndex = instance.getModel().getVehicle() != null
-                        ? instance.getModel().getVehicle().getSubsystems().indexOf(sub) : -1;
-                int perShot = config.getAmmoPerShot();
-                if (!plugin.getBdeAmmoInventoryManager().tryConsumeAmmo(instance, subIndex, ammo, perShot)) {
-                    player.sendActionBar(Component.text("§cOut of ammo: " + ammo.name));
-                    player.playSound(player.getLocation(), org.bukkit.Sound.BLOCK_DISPENSER_FAIL, 0.7f, 1.0f);
-                    return; // do not fire and do not start the cooldown, so the player can reload and retry
-                }
-                int remaining = plugin.getBdeAmmoInventoryManager().countAvailableAmmo(instance, subIndex, ammo);
-                player.sendActionBar(Component.text("§e" + ammo.name + ": §f" + remaining + " §7rounds left"));
+        // Ammo requirement check & consumption (issue #6 - ammo boxes).
+        // The projectile's ammoType must be supplied by a loaded ammo box; draws from the turret's
+        // private storage first, then the vehicle-shared pool. No ammoType => fires freely.
+        String requiredType = config.getAmmoType();
+        if (requiredType != null && !requiredType.isEmpty() && plugin.getBdeAmmoInventoryManager() != null) {
+            int subIndex = instance.getModel().getVehicle() != null
+                    ? instance.getModel().getVehicle().getSubsystems().indexOf(sub) : -1;
+            int perShot = config.getAmmoPerShot();
+            if (!plugin.getBdeAmmoInventoryManager().tryConsumeAmmo(instance, subIndex, requiredType, perShot)) {
+                player.sendActionBar(Component.text("§cOut of ammo: " + requiredType));
+                player.playSound(player.getLocation(), org.bukkit.Sound.BLOCK_DISPENSER_FAIL, 0.7f, 1.0f);
+                return; // do not fire and do not start the cooldown, so the player can reload and retry
             }
+            int remaining = plugin.getBdeAmmoInventoryManager().countAvailableAmmo(instance, subIndex, requiredType);
+            player.sendActionBar(Component.text("§e" + requiredType + ": §f" + remaining + " §7rounds left"));
         }
 
         playerCooldowns.put(sub.getName() + "_" + config.getName(), now);

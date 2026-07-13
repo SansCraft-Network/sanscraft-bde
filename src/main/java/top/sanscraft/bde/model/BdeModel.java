@@ -658,9 +658,14 @@ public class BdeModel {
         private List<Double> directionVector = new ArrayList<>(Arrays.asList(0.0, 0.0, 1.0));
 
         // Ammo requirement. If ammoType is null/empty this weapon mode fires freely (no ammo needed).
-        // ammoType references an id registered in ammo.yml / the /bde ammo gui registry.
+        // ammoType is a free-form category; a loaded ammo box that supplies this type is drained on fire.
         private String ammoType = null;
         private int ammoPerShot = 1;
+
+        public String getAmmoType() { return (ammoType == null || ammoType.isEmpty()) ? null : ammoType; }
+        public void setAmmoType(String ammoType) { this.ammoType = ammoType; }
+        public int getAmmoPerShot() { return ammoPerShot <= 0 ? 1 : ammoPerShot; }
+        public void setAmmoPerShot(int ammoPerShot) { this.ammoPerShot = ammoPerShot; }
 
         public String getName() { return name != null ? name : "Projectile"; }
         public void setName(String name) { this.name = name; }
@@ -720,10 +725,5 @@ public class BdeModel {
             return directionVector;
         }
         public void setDirectionVector(List<Double> directionVector) { this.directionVector = directionVector; }
-
-        public String getAmmoType() { return (ammoType == null || ammoType.isEmpty()) ? null : ammoType; }
-        public void setAmmoType(String ammoType) { this.ammoType = ammoType; }
-        public int getAmmoPerShot() { return ammoPerShot <= 0 ? 1 : ammoPerShot; }
-        public void setAmmoPerShot(int ammoPerShot) { this.ammoPerShot = ammoPerShot; }
     }
 }

@@ -23,6 +23,8 @@ public class SansCraftBDEPlugin extends JavaPlugin {
     private top.sanscraft.bde.manager.BdeAmmoConfig bdeAmmoConfig;
     private top.sanscraft.bde.gui.AmmoGuiManager ammoGuiManager;
     private top.sanscraft.bde.manager.BdeAmmoInventoryManager bdeAmmoInventoryManager;
+    private top.sanscraft.bde.manager.AmmoBoxItems ammoBoxItems;
+    private top.sanscraft.bde.manager.AmmoBoxPlacementManager ammoBoxPlacementManager;
 
     @Override
     public void onEnable() {
@@ -53,6 +55,9 @@ public class SansCraftBDEPlugin extends JavaPlugin {
         this.bdeAmmoConfig.loadAmmo();
         this.ammoGuiManager = new top.sanscraft.bde.gui.AmmoGuiManager(this);
         this.bdeAmmoInventoryManager = new top.sanscraft.bde.manager.BdeAmmoInventoryManager(this);
+        this.ammoBoxItems = new top.sanscraft.bde.manager.AmmoBoxItems(this);
+        this.ammoBoxPlacementManager = new top.sanscraft.bde.manager.AmmoBoxPlacementManager(this);
+        this.ammoBoxPlacementManager.load();
 
         // Load custom blocks
         this.customBlockManager.initialize();
@@ -69,6 +74,7 @@ public class SansCraftBDEPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new CustomBlockListener(this), this);
         getServer().getPluginManager().registerEvents(new top.sanscraft.bde.listener.BdeGuiListener(this), this);
         getServer().getPluginManager().registerEvents(new top.sanscraft.bde.listener.PlayerExplosionListener(this), this);
+        getServer().getPluginManager().registerEvents(new top.sanscraft.bde.listener.AmmoBoxListener(this), this);
 
         getLogger().info("SansCraftBDE has been enabled successfully!");
     }
@@ -89,6 +95,9 @@ public class SansCraftBDEPlugin extends JavaPlugin {
         }
         if (bdeGuiManager != null) {
             bdeGuiManager.cleanupAll();
+        }
+        if (ammoBoxPlacementManager != null) {
+            ammoBoxPlacementManager.save();
         }
         getLogger().info("SansCraftBDE has been disabled and cleaned up!");
     }
@@ -111,6 +120,14 @@ public class SansCraftBDEPlugin extends JavaPlugin {
 
     public BdeGuiManager getBdeGuiManager() {
         return bdeGuiManager;
+    }
+
+    public top.sanscraft.bde.manager.AmmoBoxItems getAmmoBoxItems() {
+        return ammoBoxItems;
+    }
+
+    public top.sanscraft.bde.manager.AmmoBoxPlacementManager getAmmoBoxPlacementManager() {
+        return ammoBoxPlacementManager;
     }
 
     public top.sanscraft.bde.manager.BdeRepairConfig getBdeRepairConfig() {

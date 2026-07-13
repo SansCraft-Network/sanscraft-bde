@@ -1933,17 +1933,8 @@ public class BdeGuiManager {
                 "§eClick to type custom vector in chat."
         ));
 
-        // Ammo requirement (issue #6)
-        String ammoDisplay;
-        if (pc.getAmmoType() == null) {
-            ammoDisplay = "§aNone §7(fires freely)";
-        } else {
-            top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig ac =
-                    plugin.getBdeAmmoConfig().getRegisteredAmmo().get(pc.getAmmoType());
-            ammoDisplay = ac != null
-                    ? ("§f" + ac.name + " §7(" + pc.getAmmoType() + ")")
-                    : ("§c" + pc.getAmmoType() + " §4(unregistered!)");
-        }
+        // Ammo requirement (issue #6). ammoType is a free-form category; a loaded ammo box must supply it.
+        String ammoDisplay = pc.getAmmoType() == null ? "§aNone §7(fires freely)" : "§b" + pc.getAmmoType();
         inv.setItem(23, createGuiItem(Material.SPECTRAL_ARROW, "§bRequired Ammo: " + ammoDisplay,
                 "§7Ammo type consumed when this weapon fires.",
                 "§7Drawn from the turret's own storage first,",

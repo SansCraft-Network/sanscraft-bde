@@ -85,7 +85,10 @@ public class BdeGuiListener implements Listener {
         EDIT_PROJECTILE_IMPACT_PARTICLE,
         EDIT_PROJECTILE_BASE_POINT,
         EDIT_PROJECTILE_DIRECTION_VECTOR,
-        EDIT_AMMO_LORE
+        EDIT_AMMO_LORE,
+        EDIT_AMMO_NAME,
+        EDIT_AMMO_TYPE,
+        EDIT_AMMO_PLACEMENT_TARGET
     }
 
     public static class ChatPromptState {
@@ -1963,23 +1966,65 @@ public class BdeGuiListener implements Listener {
 
             case EDIT_AMMO_LORE:
                 if (state.ammoId != null) {
-                    top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig existing =
-                            plugin.getBdeAmmoConfig().getRegisteredAmmo().get(state.ammoId);
-                    if (existing != null) {
+                    top.sanscraft.bde.manager.BdeAmmoConfig.AmmoBoxConfig box = plugin.getBdeAmmoConfig().getBox(state.ammoId);
+                    if (box != null) {
                         java.util.List<String> newLore = new java.util.ArrayList<>();
                         if (!text.equalsIgnoreCase("clear")) {
                             for (String part : text.split("\\|")) {
                                 newLore.add(org.bukkit.ChatColor.translateAlternateColorCodes('&', part.trim()));
                             }
+                        } else {
+                            newLore = top.sanscraft.bde.manager.BdeAmmoConfig.defaultLore();
                         }
-                        top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig updated =
-                                new top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig(
-                                        existing.id, existing.name, existing.material,
-                                        existing.customModelData, existing.customBlockId, newLore);
-                        plugin.getBdeAmmoConfig().addAmmo(updated);
-                        player.sendMessage(newLore.isEmpty()
-                                ? "§aCleared lore template for ammo: " + state.ammoId
-                                : "§aUpdated lore template for ammo: " + state.ammoId);
+                        box.lore = newLore;
+                        plugin.getBdeAmmoConfig().addBox(box);
+                        player.sendMessage("§aUpdated lore for ammo box: " + state.ammoId);
+                    }
+                    reopenMenu(player, state);
+                }
+                break;
+
+            case EDIT_AMMO_NAME:
+                if (state.ammoId != null) {
+                    top.sanscraft.bde.manager.BdeAmmoConfig.AmmoBoxConfig box = plugin.getBdeAmmoConfig().getBox(state.ammoId);
+                    if (box != null) {
+                        box.name = org.bukkit.ChatColor.translateAlternateColorCodes('&', text);
+                        plugin.getBdeAmmoConfig().addBox(box);
+                        player.sendMessage("§aBox name set to " + box.name);
+                    }
+                    reopenMenu(player, state);
+                }
+                break;
+
+            case EDIT_AMMO_TYPE:
+                if (state.ammoId != null) {
+                    top.sanscraft.bde.manager.BdeAmmoConfig.AmmoBoxConfig box = plugin.getBdeAmmoConfig().getBox(state.ammoId);
+                    if (box != null) {
+                        box.suppliedType = text.trim();
+                        plugin.getBdeAmmoConfig().addBox(box);
+                        player.sendMessage("§aBox now supplies ammo type: §b" + box.suppliedType);
+                    }
+                    reopenMenu(player, state);
+                }
+                break;
+
+            case EDIT_AMMO_PLACEMENT_TARGET:
+                if (state.ammoId != null) {
+                    top.sanscraft.bde.manager.BdeAmmoConfig.AmmoBoxConfig box = plugin.getBdeAmmoConfig().getBox(state.ammoId);
+                    if (box != null) {
+                        if (box.placementMode == top.sanscraft.bde.manager.BdeAmmoConfig.PlacementMode.BDE_BLOCK) {
+                            box.placementBlockId = text.trim();
+                            player.sendMessage("§aPlacement bde block set to §f" + box.placementBlockId);
+                        } else {
+                            org.bukkit.Material m = org.bukkit.Material.matchMaterial(text.trim().toUpperCase());
+                            if (m == null || !m.isBlock()) {
+                                player.sendMessage("§cNot a valid block material: " + text);
+                            } else {
+                                box.placementMaterial = m;
+                                player.sendMessage("§aPlacement vanilla block set to §f" + m.name());
+                            }
+                        }
+                        plugin.getBdeAmmoConfig().addBox(box);
                     }
                     reopenMenu(player, state);
                 }
@@ -2075,6 +2120,9 @@ public class BdeGuiListener implements Listener {
                     plugin.getBdeGuiManager().openProjectileEditor(player, state.projectileId);
                     break;
                 case EDIT_AMMO_LORE:
+                case EDIT_AMMO_NAME:
+                case EDIT_AMMO_TYPE:
+                case EDIT_AMMO_PLACEMENT_TARGET:
                     if (state.ammoId != null) {
                         plugin.getAmmoGuiManager().openAmmoEditor(player, state.ammoId);
                     }
@@ -3567,14 +3615,14 @@ public class BdeGuiListener implements Listener {
                 pc.setAmmoType(null);
                 player.sendMessage("§aAmmo requirement cleared - this weapon now fires freely.");
             } else {
-                java.util.List<String> ids = new java.util.ArrayList<>(plugin.getBdeAmmoConfig().getRegisteredAmmo().keySet());
-                if (ids.isEmpty()) {
-                    player.sendMessage("§cNo ammo types registered yet. Use §e/bde ammo gui §cto create one first.");
+                java.util.List<String> types = new java.util.ArrayList<>(plugin.getBdeAmmoConfig().getSuppliedTypes());
+                if (types.isEmpty()) {
+                    player.sendMessage("§cNo ammo box types defined yet. Use §e/bde ammo gui §cto create a box first.");
                 } else {
                     String current = pc.getAmmoType();
-                    int idx = current == null ? -1 : ids.indexOf(current);
-                    idx = (idx + 1) % ids.size();
-                    pc.setAmmoType(ids.get(idx));
+                    int idx = current == null ? -1 : types.indexOf(current);
+                    idx = (idx + 1) % types.size();
+                    pc.setAmmoType(types.get(idx));
                 }
             }
             player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
@@ -3912,128 +3960,173 @@ public class BdeGuiListener implements Listener {
 
         String ammoId = holder.getExtraData();
 
+        // --- Storage selector (shared vs. per-turret) ---
         if (ammoId != null && ammoId.equals("selector")) {
             UUID selectedModelId = holder.getSelectedModelId();
             ModelInstance instance = selectedModelId != null ? plugin.getModelManager().getActiveInstances().get(selectedModelId) : null;
-            if (instance == null) {
-                player.closeInventory();
-                return;
-            }
-
-            if (slot == 22) {
-                player.closeInventory();
-                return;
-            }
-            if (slot == 11) {
-                plugin.getBdeAmmoInventoryManager().openAmmoInventory(player, instance, "shared");
-                return;
-            }
+            if (instance == null) { player.closeInventory(); return; }
+            if (slot == 22) { player.closeInventory(); return; }
+            if (slot == 11) { plugin.getBdeAmmoInventoryManager().openAmmoInventory(player, instance, "shared"); return; }
             if (slot >= 13 && slot <= 15) {
                 int subIdx = slot - 13;
                 BdeModel.VehicleConfig cfg = instance.getModel().getVehicle();
                 if (cfg != null && subIdx >= 0 && subIdx < cfg.getSubsystems().size()) {
                     plugin.getBdeAmmoInventoryManager().openAmmoInventory(player, instance, "subsystem_" + subIdx);
                 }
-                return;
             }
             return;
         }
 
-        if (ammoId == null || ammoId.isEmpty()) {
-            // We're in the ammo catalog
-            if (slot == 45) {
-                player.closeInventory();
-                return;
+        // --- Delete confirmation ---
+        if (ammoId != null && ammoId.startsWith("confirmdelete:")) {
+            String targetId = ammoId.substring("confirmdelete:".length());
+            if (slot == 11) {
+                plugin.getBdeAmmoConfig().removeBox(targetId);
+                player.sendMessage("§cDeleted ammo box: " + targetId);
+                player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+                plugin.getAmmoGuiManager().openAmmoCatalog(player);
+            } else if (slot == 15) {
+                plugin.getAmmoGuiManager().openAmmoCatalog(player);
             }
+            return;
+        }
+
+        // --- Catalog ---
+        if (ammoId == null || ammoId.isEmpty()) {
+            if (slot == 45) { player.closeInventory(); return; }
             if (slot == 49) {
-                // Add new ammo type - check cursor
                 ItemStack cursor = event.getCursor();
-                if (cursor != null && cursor.getType() != Material.AIR) {
-                    String newId = cursor.getType().name().toLowerCase();
-                    int customModelData = cursor.hasItemMeta() && cursor.getItemMeta().hasCustomModelData() ? cursor.getItemMeta().getCustomModelData() : -1;
-                    String customBlockId = null;
-
-                    // Check if BDE custom block
-                    if (cursor.hasItemMeta()) {
-                        org.bukkit.NamespacedKey cbKey = new org.bukkit.NamespacedKey(plugin, "custom_block_id");
-                        customBlockId = cursor.getItemMeta().getPersistentDataContainer().get(cbKey, org.bukkit.persistence.PersistentDataType.STRING);
-                        if (customBlockId != null && !customBlockId.isEmpty()) {
-                            newId = customBlockId.toLowerCase();
-                        }
-                    }
-
-                    int suffix = 1;
-                    String finalId = newId;
-                    while (plugin.getBdeAmmoConfig().getRegisteredAmmo().containsKey(finalId)) {
-                        finalId = newId + "_" + suffix;
-                        suffix++;
-                    }
-
-                    String displayName = customBlockId != null && !customBlockId.isEmpty() ? customBlockId : cursor.getType().name();
-                    top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig newAmmo = new top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig(
-                            finalId, displayName, cursor.getType(), customModelData, customBlockId
-                    );
-                    plugin.getBdeAmmoConfig().addAmmo(newAmmo);
-                    player.sendMessage("§aRegistered new ammo type: " + finalId);
-                    player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.2f);
-                    plugin.getAmmoGuiManager().openAmmoCatalog(player);
-                } else {
+                if (cursor == null || cursor.getType() == Material.AIR) {
                     player.sendMessage("§cPlace an item on your cursor first, then click the star.");
+                    return;
                 }
+                String baseId = cursor.getType().name().toLowerCase();
+                String itemCustomBlockId = null;
+                if (cursor.hasItemMeta()) {
+                    String cb = cursor.getItemMeta().getPersistentDataContainer().get(
+                            new org.bukkit.NamespacedKey(plugin, "custom_block_id"), org.bukkit.persistence.PersistentDataType.STRING);
+                    if (cb != null && !cb.isEmpty()) { itemCustomBlockId = cb; baseId = cb.toLowerCase(); }
+                }
+                String finalId = baseId; int suffix = 1;
+                while (plugin.getBdeAmmoConfig().getBoxes().containsKey(finalId)) { finalId = baseId + "_" + (suffix++); }
+
+                top.sanscraft.bde.manager.BdeAmmoConfig.AmmoBoxConfig box =
+                        new top.sanscraft.bde.manager.BdeAmmoConfig.AmmoBoxConfig(finalId);
+                box.name = "§f" + cursor.getType().name();
+                box.material = cursor.getType();
+                box.customModelData = cursor.hasItemMeta() && cursor.getItemMeta().hasCustomModelData() ? cursor.getItemMeta().getCustomModelData() : -1;
+                box.itemCustomBlockId = itemCustomBlockId;
+                box.suppliedType = finalId;
+                box.maxCapacity = 64;
+                box.defaultFill = 64;
+                box.lore = top.sanscraft.bde.manager.BdeAmmoConfig.defaultLore();
+                plugin.getBdeAmmoConfig().addBox(box);
+                player.sendMessage("§aCreated new ammo box: " + finalId);
+                player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.2f);
+                plugin.getAmmoGuiManager().openAmmoEditor(player, finalId);
                 return;
             }
             if (slot >= 9 && slot < 45) {
-                // Click on an ammo entry -> open its editor
-                if (clickedItem != null && clickedItem.getType() != Material.AIR && clickedItem.hasItemMeta()) {
-                    String displayName = clickedItem.getItemMeta().getDisplayName();
-                    for (top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig a : plugin.getBdeAmmoConfig().getRegisteredAmmo().values()) {
-                        if (displayName.contains(a.name)) {
-                            plugin.getAmmoGuiManager().openAmmoEditor(player, a.id);
-                            return;
-                        }
+                String boxId = plugin.getAmmoGuiManager().getCatalogId(clickedItem);
+                if (boxId != null) {
+                    top.sanscraft.bde.manager.BdeAmmoConfig.AmmoBoxConfig box = plugin.getBdeAmmoConfig().getBox(boxId);
+                    if (box == null) return;
+                    if (event.isShiftClick() && event.isRightClick()) {
+                        plugin.getAmmoGuiManager().giveAmmoBox(player, box);
+                    } else if (event.isShiftClick() && event.isLeftClick()) {
+                        plugin.getAmmoGuiManager().openAmmoDeleteConfirm(player, boxId);
+                    } else {
+                        plugin.getAmmoGuiManager().openAmmoEditor(player, boxId);
                     }
                 }
             }
-        } else {
-            // We're in a specific ammo editor
-            top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig ammo = plugin.getBdeAmmoConfig().getRegisteredAmmo().get(ammoId);
-            if (ammo == null) {
-                plugin.getAmmoGuiManager().openAmmoCatalog(player);
-                return;
-            }
+            return;
+        }
 
-            if (slot == 45) {
-                plugin.getAmmoGuiManager().openAmmoCatalog(player);
-                return;
-            }
-            if (slot == 49) {
+        // --- Box editor ---
+        top.sanscraft.bde.manager.BdeAmmoConfig.AmmoBoxConfig box = plugin.getBdeAmmoConfig().getBox(ammoId);
+        if (box == null) { plugin.getAmmoGuiManager().openAmmoCatalog(player); return; }
+
+        boolean shift = event.isShiftClick();
+        boolean right = event.isRightClick();
+        switch (slot) {
+            case 45: plugin.getAmmoGuiManager().openAmmoCatalog(player); return;
+            case 49: player.closeInventory(); return;
+            case 10:
                 player.closeInventory();
+                player.sendMessage("§eType the new box name in chat (§f&§e color codes ok, 'cancel' to exit):");
+                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_AMMO_NAME, ammoId));
                 return;
-            }
-            if (slot == 40) {
-                plugin.getBdeAmmoConfig().removeAmmo(ammoId);
-                player.sendMessage("§cDeleted ammo type: " + ammoId);
-                player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
-                plugin.getAmmoGuiManager().openAmmoCatalog(player);
-                return;
-            }
-            if (slot == 24) { // Edit lore template via chat
+            case 11:
                 player.closeInventory();
-                player.sendMessage("§eType the ammo lore in chat. Separate lines with §f|§e (or type §fclear§e / §fcancel§e).");
-                player.sendMessage("§7Placeholders: §b%bde_ammo_current% §7(this storage) and §b%bde_ammo_total% §7(whole vehicle). Color codes with §f&§7 are supported.");
+                player.sendMessage("§eType the ammo type this box supplies (must match a projectile's required ammo). 'cancel' to exit:");
+                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_AMMO_TYPE, ammoId));
+                return;
+            case 12:
+                box.maxCapacity = Math.max(1, box.maxCapacity + (right ? -1 : 1) * (shift ? 10 : 1));
+                if (box.defaultFill > box.maxCapacity) box.defaultFill = box.maxCapacity;
+                plugin.getBdeAmmoConfig().addBox(box);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.2f);
+                plugin.getAmmoGuiManager().openAmmoEditor(player, ammoId);
+                return;
+            case 13:
+                box.defaultFill = Math.max(0, Math.min(box.maxCapacity, box.defaultFill + (right ? -1 : 1) * (shift ? 10 : 1)));
+                plugin.getBdeAmmoConfig().addBox(box);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.2f);
+                plugin.getAmmoGuiManager().openAmmoEditor(player, ammoId);
+                return;
+            case 14:
+                player.closeInventory();
+                player.sendMessage("§eType the box lore in chat. Separate lines with §f|§e (or 'clear' / 'cancel').");
+                player.sendMessage("§7Placeholders: §b%bde_ammo_current% §7and §b%bde_ammo_max%§7. §f&§7 color codes ok.");
                 activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_AMMO_LORE, ammoId));
                 return;
-            }
-            if (slot == 31) { // Clear lore template
-                top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig cleared =
-                        new top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig(
-                                ammo.id, ammo.name, ammo.material, ammo.customModelData, ammo.customBlockId, new java.util.ArrayList<>());
-                plugin.getBdeAmmoConfig().addAmmo(cleared);
-                player.sendMessage("§aCleared lore template for ammo: " + ammoId);
-                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+            case 20: {
+                ItemStack cursor = event.getCursor();
+                if (cursor == null || cursor.getType() == Material.AIR) {
+                    player.sendMessage("§cPlace an item on your cursor first to copy its appearance.");
+                    return;
+                }
+                box.material = cursor.getType();
+                box.customModelData = cursor.hasItemMeta() && cursor.getItemMeta().hasCustomModelData() ? cursor.getItemMeta().getCustomModelData() : -1;
+                box.itemCustomBlockId = cursor.hasItemMeta() ? cursor.getItemMeta().getPersistentDataContainer().get(
+                        new org.bukkit.NamespacedKey(plugin, "custom_block_id"), org.bukkit.persistence.PersistentDataType.STRING) : null;
+                plugin.getBdeAmmoConfig().addBox(box);
+                player.sendMessage("§aUpdated box appearance to " + box.material.name());
                 plugin.getAmmoGuiManager().openAmmoEditor(player, ammoId);
                 return;
             }
+            case 22:
+                box.placeable = !box.placeable;
+                plugin.getBdeAmmoConfig().addBox(box);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, box.placeable ? 1.5f : 0.8f);
+                plugin.getAmmoGuiManager().openAmmoEditor(player, ammoId);
+                return;
+            case 23:
+                if (box.placementMode == top.sanscraft.bde.manager.BdeAmmoConfig.PlacementMode.NONE) {
+                    box.placementMode = top.sanscraft.bde.manager.BdeAmmoConfig.PlacementMode.BDE_BLOCK;
+                } else if (box.placementMode == top.sanscraft.bde.manager.BdeAmmoConfig.PlacementMode.BDE_BLOCK) {
+                    box.placementMode = top.sanscraft.bde.manager.BdeAmmoConfig.PlacementMode.VANILLA_BLOCK;
+                } else {
+                    box.placementMode = top.sanscraft.bde.manager.BdeAmmoConfig.PlacementMode.NONE;
+                }
+                plugin.getBdeAmmoConfig().addBox(box);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+                plugin.getAmmoGuiManager().openAmmoEditor(player, ammoId);
+                return;
+            case 24:
+                player.closeInventory();
+                player.sendMessage("§eType a bde custom block id (for BDE_BLOCK) or a Minecraft material name (for VANILLA_BLOCK). 'cancel' to exit:");
+                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_AMMO_PLACEMENT_TARGET, ammoId));
+                return;
+            case 30:
+                plugin.getAmmoGuiManager().giveAmmoBox(player, box);
+                return;
+            case 40:
+                plugin.getAmmoGuiManager().openAmmoDeleteConfirm(player, ammoId);
+                return;
+            default:
+                return;
         }
     }
 
@@ -4074,8 +4167,8 @@ public class BdeGuiListener implements Listener {
             if (clickedInv.equals(event.getView().getBottomInventory())) {
                 ItemStack item = event.getCurrentItem();
                 if (item != null && item.getType() != Material.AIR) {
-                    if (plugin.getBdeAmmoConfig().findMatchingAmmo(item) == null) {
-                        player.sendMessage("§cYou can only store registered ammo here!");
+                    if (!plugin.getAmmoBoxItems().isAmmoBox(item)) {
+                        player.sendMessage("§cYou can only store ammo boxes here!");
                         event.setCancelled(true);
                     }
                 }
@@ -4091,8 +4184,8 @@ public class BdeGuiListener implements Listener {
                     event.getAction() == org.bukkit.event.inventory.InventoryAction.PLACE_ONE ||
                     event.getAction() == org.bukkit.event.inventory.InventoryAction.SWAP_WITH_CURSOR) {
                     
-                    if (plugin.getBdeAmmoConfig().findMatchingAmmo(cursorItem) == null) {
-                        player.sendMessage("§cYou can only store registered ammo here!");
+                    if (!plugin.getAmmoBoxItems().isAmmoBox(cursorItem)) {
+                        player.sendMessage("§cYou can only store ammo boxes here!");
                         event.setCancelled(true);
                     }
                 }
@@ -4102,8 +4195,8 @@ public class BdeGuiListener implements Listener {
             if (event.getClick() == org.bukkit.event.inventory.ClickType.NUMBER_KEY) {
                 ItemStack hotbarItem = event.getWhoClicked().getInventory().getItem(event.getHotbarButton());
                 if (hotbarItem != null && hotbarItem.getType() != Material.AIR) {
-                    if (plugin.getBdeAmmoConfig().findMatchingAmmo(hotbarItem) == null) {
-                        player.sendMessage("§cYou can only store registered ammo here!");
+                    if (!plugin.getAmmoBoxItems().isAmmoBox(hotbarItem)) {
+                        player.sendMessage("§cYou can only store ammo boxes here!");
                         event.setCancelled(true);
                     }
                 }
@@ -4126,8 +4219,8 @@ public class BdeGuiListener implements Listener {
                     break;
                 }
             }
-            if (toTop && plugin.getBdeAmmoConfig().findMatchingAmmo(item) == null) {
-                player.sendMessage("§cYou can only store registered ammo here!");
+            if (toTop && !plugin.getAmmoBoxItems().isAmmoBox(item)) {
+                player.sendMessage("§cYou can only store ammo boxes here!");
                 event.setCancelled(true);
             }
         }
@@ -4141,8 +4234,6 @@ public class BdeGuiListener implements Listener {
         top.sanscraft.bde.gui.BdeAmmoStorageHolder holder = (top.sanscraft.bde.gui.BdeAmmoStorageHolder) inv.getHolder();
         ModelInstance instance = plugin.getModelManager().getActiveInstances().get(holder.getInstanceId());
         if (instance != null) {
-            // Reset ammo items' lore to the raw template before persisting so stored stacks stay canonical/stackable
-            plugin.getBdeAmmoInventoryManager().normalizeStorageLore(inv);
             plugin.getBdeAmmoInventoryManager().saveAmmoInventory(instance, holder.getStorageKey(), inv);
         }
     }
