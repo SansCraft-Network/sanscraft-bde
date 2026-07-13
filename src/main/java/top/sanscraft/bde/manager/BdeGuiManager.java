@@ -287,6 +287,12 @@ public class BdeGuiManager {
                 canMoveOrRotate ? "§7Adjust translation, yaw, and pitch." : "§cYou don't have permission to use this."
         ));
 
+        inv.setItem(22, createGuiItem(Material.SHIELD,
+                "§6Collision Settings Menu",
+                "§7Configure physical collision, scan range,",
+                "§7and hitbox merging/normalization."
+        ));
+
         boolean canVehicle = player.hasPermission("sanscraft.bde.vehicles");
         inv.setItem(23, createGuiItem(Material.MINECART,
                 "§eVehicle Config Menu" + (canVehicle ? "" : " §c[LOCKED]"),
@@ -491,6 +497,8 @@ public class BdeGuiManager {
                     "§7Click to configure custom seat names and icons."
             ));
 
+
+
             inv.setItem(22, createGuiItem(Material.TARGET, "§6Configure Subsystems & Weapons",
                     "§7Configure operator seats, displays, weapons and projectiles."
             ));
@@ -570,6 +578,62 @@ public class BdeGuiManager {
         inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Main Menu"));
         inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
 
+    }
+
+    public void openCollisionSettingsMenu(Player player, ModelInstance instance) {
+        BdeGuiHolder holder = new BdeGuiHolder(BdeGuiHolder.GuiType.COLLISION_SETTINGS, instance.getId());
+        Inventory inv = Bukkit.createInventory(holder, 54, "§8BDE Collision Settings");
+
+        ItemStack pane = createGuiItem(Material.BLACK_STAINED_GLASS_PANE, " ");
+        for (int i = 0; i < 54; i++) {
+            if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) {
+                inv.setItem(i, pane);
+            }
+        }
+
+        BdeModel model = instance.getModel();
+        boolean isCollidable = model.getCollidable() != null && model.getCollidable();
+
+        inv.setItem(13, createGuiItem(Material.SHIELD,
+                "§6Collision Mode: " + (isCollidable ? "§aENABLED" : "§cDISABLED"),
+                "§7Toggle whether this model has physical collision.",
+                " ",
+                "§eClick to toggle collision."
+        ));
+
+        float threshold = model.getHitboxScanThreshold() != null ? model.getHitboxScanThreshold() : 1.5f;
+        inv.setItem(20, createGuiItem(Material.SPYGLASS, "§bHitbox Scan Threshold: §e" + String.format("%.2f", threshold),
+                "§7Determines how block displays are clustered into hitboxes.",
+                "§7Larger values result in fewer, larger hitboxes.",
+                "§7Smaller values result in more, smaller hitboxes.",
+                " ",
+                "§aLeft-Click to increase by 0.1",
+                "§cRight-Click to decrease by 0.1"
+        ));
+
+        float mergeDist = model.getHitboxMergeDistance() != null ? model.getHitboxMergeDistance() : 2.0f;
+        inv.setItem(22, createGuiItem(Material.COMPASS, "§bHitbox Merge Distance: §e" + String.format("%.2f", mergeDist),
+                "§7Maximum distance between hitboxes to consider merging.",
+                "§7Hitboxes closer than this may be combined.",
+                " ",
+                "§aLeft-Click to increase by 0.2",
+                "§cRight-Click to decrease by 0.2"
+        ));
+
+        float mergeVolume = model.getHitboxMergeVolumeLimit() != null ? model.getHitboxMergeVolumeLimit() : 1.5f;
+        inv.setItem(24, createGuiItem(Material.BUCKET, "§bMerge Volume Limit: §e" + String.format("%.2f", mergeVolume),
+                "§7Maximum volume growth ratio allowed when merging.",
+                "§7For example, 1.5 means the combined box cannot",
+                "§7exceed 150% of the sum of the original volumes.",
+                " ",
+                "§aLeft-Click to increase by 0.05",
+                "§cRight-Click to decrease by 0.05"
+        ));
+
+        inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Main Menu"));
+        inv.setItem(49, createGuiItem(Material.BARRIER, "§cClose Menu"));
+
+        player.openInventory(inv);
     }
 
     public void openAnimationsMenu(Player player, ModelInstance instance) {
@@ -1867,6 +1931,33 @@ public class BdeGuiManager {
                 " ",
                 "§7Model forward pointing vector.",
                 "§eClick to type custom vector in chat."
+        ));
+
+        // Ammo requirement (issue #6)
+        String ammoDisplay;
+        if (pc.getAmmoType() == null) {
+            ammoDisplay = "§aNone §7(fires freely)";
+        } else {
+            top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig ac =
+                    plugin.getBdeAmmoConfig().getRegisteredAmmo().get(pc.getAmmoType());
+            ammoDisplay = ac != null
+                    ? ("§f" + ac.name + " §7(" + pc.getAmmoType() + ")")
+                    : ("§c" + pc.getAmmoType() + " §4(unregistered!)");
+        }
+        inv.setItem(23, createGuiItem(Material.SPECTRAL_ARROW, "§bRequired Ammo: " + ammoDisplay,
+                "§7Ammo type consumed when this weapon fires.",
+                "§7Drawn from the turret's own storage first,",
+                "§7then the vehicle-shared ammo pool.",
+                " ",
+                "§aLeft-Click: §fcycle to next registered ammo",
+                "§cRight-Click: §fclear (no ammo required)"
+        ));
+
+        inv.setItem(24, createGuiItem(Material.FLINT, "§bAmmo Per Shot: §e" + pc.getAmmoPerShot(),
+                "§7Units consumed each time this weapon fires.",
+                " ",
+                "§aLeft-Click: §f+1",
+                "§cRight-Click: §f-1 §7(min 1)"
         ));
 
         inv.setItem(45, createGuiItem(Material.ARROW, "§7Back to Catalog"));

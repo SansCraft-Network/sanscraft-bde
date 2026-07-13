@@ -17,6 +17,12 @@ public class SansCraftBDEPlugin extends JavaPlugin {
     private CustomBlockManager customBlockManager;
     private AnimationEngine animationEngine;
     private BdeGuiManager bdeGuiManager;
+    private top.sanscraft.bde.manager.BdeRepairConfig bdeRepairConfig;
+    private top.sanscraft.bde.manager.BdeRepairTaskManager bdeRepairTaskManager;
+    private top.sanscraft.bde.gui.RepairGuiManager repairGuiManager;
+    private top.sanscraft.bde.manager.BdeAmmoConfig bdeAmmoConfig;
+    private top.sanscraft.bde.gui.AmmoGuiManager ammoGuiManager;
+    private top.sanscraft.bde.manager.BdeAmmoInventoryManager bdeAmmoInventoryManager;
 
     @Override
     public void onEnable() {
@@ -39,6 +45,14 @@ public class SansCraftBDEPlugin extends JavaPlugin {
         this.modelManager = new ModelManager(this);
         this.customBlockManager = new CustomBlockManager(this);
         this.bdeGuiManager = new BdeGuiManager(this);
+        this.bdeRepairConfig = new top.sanscraft.bde.manager.BdeRepairConfig(this);
+        this.bdeRepairConfig.loadRepairs();
+        this.bdeRepairTaskManager = new top.sanscraft.bde.manager.BdeRepairTaskManager(this);
+        this.repairGuiManager = new top.sanscraft.bde.gui.RepairGuiManager(this);
+        this.bdeAmmoConfig = new top.sanscraft.bde.manager.BdeAmmoConfig(this);
+        this.bdeAmmoConfig.loadAmmo();
+        this.ammoGuiManager = new top.sanscraft.bde.gui.AmmoGuiManager(this);
+        this.bdeAmmoInventoryManager = new top.sanscraft.bde.manager.BdeAmmoInventoryManager(this);
 
         // Load custom blocks
         this.customBlockManager.initialize();
@@ -97,5 +111,29 @@ public class SansCraftBDEPlugin extends JavaPlugin {
 
     public BdeGuiManager getBdeGuiManager() {
         return bdeGuiManager;
+    }
+
+    public top.sanscraft.bde.manager.BdeRepairConfig getBdeRepairConfig() {
+        return bdeRepairConfig;
+    }
+
+    public top.sanscraft.bde.manager.BdeRepairTaskManager getBdeRepairTaskManager() {
+        return bdeRepairTaskManager;
+    }
+
+    public top.sanscraft.bde.gui.RepairGuiManager getRepairGuiManager() {
+        return repairGuiManager;
+    }
+
+    public top.sanscraft.bde.manager.BdeAmmoConfig getBdeAmmoConfig() {
+        return bdeAmmoConfig;
+    }
+
+    public top.sanscraft.bde.gui.AmmoGuiManager getAmmoGuiManager() {
+        return ammoGuiManager;
+    }
+
+    public top.sanscraft.bde.manager.BdeAmmoInventoryManager getBdeAmmoInventoryManager() {
+        return bdeAmmoInventoryManager;
     }
 }

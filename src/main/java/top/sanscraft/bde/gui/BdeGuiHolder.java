@@ -105,6 +105,16 @@ public class BdeGuiHolder implements InventoryHolder {
         this.page = page;
     }
 
+    private String extraData;
+
+    public String getExtraData() {
+        return extraData;
+    }
+
+    public void setExtraData(String extraData) {
+        this.extraData = extraData;
+    }
+
     @Override
     public @NotNull Inventory getInventory() {
         return null; // Will be built dynamically by BdeGuiManager
@@ -133,6 +143,9 @@ public class BdeGuiHolder implements InventoryHolder {
         TURRET_PROJECTILE_LINK,
         PROJECTILE_CATALOG,
         PROJECTILE_EDITOR,
-        SUBSYSTEM_PROJECTILE_OVERRIDE
+        SUBSYSTEM_PROJECTILE_OVERRIDE,
+        COLLISION_SETTINGS,
+        REPAIR_EDITOR,
+        AMMO_EDITOR
     }
 }

@@ -5,8 +5,10 @@ import org.bukkit.entity.Display;
 import org.bukkit.entity.Entity;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public class ModelInstance {
@@ -30,6 +32,7 @@ public class ModelInstance {
     private final List<org.bukkit.entity.ArmorStand> passengerSeats = new ArrayList<>();
     private double currentHp = 100.0;
     private final List<org.bukkit.entity.Interaction> hitboxes = new ArrayList<>();
+    private final List<org.bukkit.entity.Shulker> shulkerColliders = new ArrayList<>();
     private final Map<String, Integer> activeSubsystemModes = new HashMap<>(); // key: playerId_subsystemName -> mode index
     private final Map<UUID, Boolean> weaponCamActive = new HashMap<>(); // key: playerId -> active
     private final Map<String, Boolean> subsystemWasdAiming = new HashMap<>(); // key: subsystemName -> true/false
@@ -38,6 +41,8 @@ public class ModelInstance {
     private final Map<UUID, Boolean> lastJumpStates = new HashMap<>();
     private final Map<String, Double> subsystemRelativeYaw = new HashMap<>();
     private final Map<String, Double> subsystemRelativePitch = new HashMap<>();
+    private final Map<String, Double> subsystemHp = new HashMap<>();
+    private final Set<String> disabledSubsystems = new HashSet<>();
     private int engineSoundTimer = 0;
 
     public ModelInstance(BdeModel model, Location spawnLocation, double scale) {
@@ -49,6 +54,16 @@ public class ModelInstance {
         this.currentYaw = (float) spawnLocation.getYaw();
         if (model.getVehicleStats() != null) {
             this.currentHp = model.getVehicleStats().getMaxHp();
+        }
+        if (model.getVehicle() != null && model.getVehicle().getSubsystems() != null) {
+            for (BdeModel.SubsystemConfig sub : model.getVehicle().getSubsystems()) {
+                if (sub.getMaxHp() != null) {
+                    this.subsystemHp.put(sub.getName(), sub.getMaxHp());
+                }
+                if (sub.getStartDisabled() != null && sub.getStartDisabled()) {
+                    this.disabledSubsystems.add(sub.getName());
+                }
+            }
         }
     }
 
@@ -168,6 +183,14 @@ public class ModelInstance {
         }
         hitboxes.clear();
 
+        // Remove all shulker colliders
+        for (org.bukkit.entity.Shulker shulker : shulkerColliders) {
+            if (shulker != null && shulker.isValid()) {
+                shulker.remove();
+            }
+        }
+        shulkerColliders.clear();
+
         // Remove vehicle root
         if (vehicleRoot != null && vehicleRoot.isValid()) {
             vehicleRoot.remove();
@@ -236,6 +259,10 @@ public class ModelInstance {
 
     public List<org.bukkit.entity.Interaction> getHitboxes() {
         return hitboxes;
+    }
+
+    public List<org.bukkit.entity.Shulker> getShulkerColliders() {
+        return shulkerColliders;
     }
 
     public int getSubsystemMode(UUID playerId, String subName) {
@@ -313,5 +340,33 @@ public class ModelInstance {
 
     public void setEngineSoundTimer(int timer) {
         this.engineSoundTimer = timer;
+    }
+
+    public Double getSubsystemHp(String subName) {
+        return subsystemHp.get(subName);
+    }
+
+    public void setSubsystemHp(String subName, double hp) {
+        subsystemHp.put(subName, hp);
+    }
+
+    public boolean isSubsystemDisabled(String subName) {
+        return disabledSubsystems.contains(subName);
+    }
+
+    public void setSubsystemDisabled(String subName, boolean disabled) {
+        if (disabled) {
+            disabledSubsystems.add(subName);
+        } else {
+            disabledSubsystems.remove(subName);
+        }
+    }
+
+    public Map<String, Double> getSubsystemHpMap() {
+        return subsystemHp;
+    }
+
+    public Set<String> getDisabledSubsystems() {
+        return disabledSubsystems;
     }
 }

@@ -40,3 +40,9 @@ block-traction:
   ICE: 0.1
   SLIME_BLOCK: 0.2
   SOUL_SAND: 0.4
+
+# Ammo Storage Sizes (must be multiples of 9, e.g. 9, 18, 27, 36, 45, 54)
+ammo:
+  storage-size:
+    vehicle: 27
+    turret: 9

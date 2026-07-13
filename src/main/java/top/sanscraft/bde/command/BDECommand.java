@@ -105,6 +105,15 @@ public class BDECommand implements CommandExecutor, TabCompleter {
             case "projectile":
                 handleProjectile(sender, args);
                 break;
+            case "repair":
+                handleRepair(sender, args);
+                break;
+            case "ammo":
+                handleAmmo(sender, args);
+                break;
+            case "link":
+                handleLink(sender, args);
+                break;
             case "debug":
                 handleDebug(sender, args);
                 break;
@@ -760,6 +769,149 @@ public class BDECommand implements CommandExecutor, TabCompleter {
         player.sendMessage(ChatColor.GREEN + "Opened Global Block Traction menu.");
     }
 
+    private void handleRepair(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(ChatColor.RED + "Only players can run this subcommand.");
+            return;
+        }
+
+        if (!(sender.hasPermission("sanscraft.bde.repair"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to manage repair tools.");
+            return;
+        }
+
+        if (args.length < 2) {
+            sender.sendMessage(ChatColor.RED + "Usage: /bde repair <gui|reload>");
+            return;
+        }
+
+        Player player = (Player) sender;
+        String action = args[1].toLowerCase();
+
+        switch (action) {
+            case "gui":
+                plugin.getRepairGuiManager().openRepairCatalog(player);
+                break;
+            case "reload":
+                plugin.getBdeRepairConfig().loadRepairs();
+                player.sendMessage(ChatColor.GREEN + "Reloaded repairs.yml successfully. " + plugin.getBdeRepairConfig().getRegisteredTools().size() + " tools loaded.");
+                break;
+            default:
+                player.sendMessage(ChatColor.RED + "Unknown repair action: " + action + ". Use gui or reload.");
+                break;
+        }
+    }
+
+    private void handleAmmo(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(ChatColor.RED + "Only players can run this subcommand.");
+            return;
+        }
+
+        if (!(sender.hasPermission("sanscraft.bde.ammo"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to manage ammo.");
+            return;
+        }
+
+        if (args.length < 2) {
+            sender.sendMessage(ChatColor.RED + "Usage: /bde ammo <gui|reload>");
+            return;
+        }
+
+        Player player = (Player) sender;
+        String action = args[1].toLowerCase();
+
+        switch (action) {
+            case "gui":
+                plugin.getAmmoGuiManager().openAmmoCatalog(player);
+                break;
+            case "reload":
+                plugin.getBdeAmmoConfig().loadAmmo();
+                player.sendMessage(ChatColor.GREEN + "Reloaded ammo.yml successfully. " + plugin.getBdeAmmoConfig().getRegisteredAmmo().size() + " ammo types registered.");
+                break;
+            default:
+                player.sendMessage(ChatColor.RED + "Unknown ammo action: " + action + ". Use gui or reload.");
+                break;
+        }
+    }
+
+    private void handleLink(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage(ChatColor.RED + "Only players can link items to vehicles.");
+            return;
+        }
+
+        if (!(sender.hasPermission("sanscraft.bde.link"))) {
+            sender.sendMessage(ChatColor.RED + "You do not have permission to link vehicle spawners.");
+            return;
+        }
+
+        if (args.length < 2) {
+            sender.sendMessage(ChatColor.RED + "Usage: /bde link <modelId> [maxUses]");
+            sender.sendMessage(ChatColor.GRAY + "maxUses: -1 for infinite, default is 1");
+            return;
+        }
+
+        Player player = (Player) sender;
+        ItemStack hand = player.getInventory().getItemInMainHand();
+        if (hand == null || hand.getType() == Material.AIR) {
+            player.sendMessage(ChatColor.RED + "You must hold an item in your main hand.");
+            return;
+        }
+
+        String modelId = args[1];
+        int maxUses = 1;
+        if (args.length >= 3) {
+            try {
+                maxUses = Integer.parseInt(args[2]);
+            } catch (NumberFormatException e) {
+                player.sendMessage(ChatColor.RED + "maxUses must be a number (-1 for infinite).");
+                return;
+            }
+        }
+
+        // Verify model exists
+        File modelsFolder = new File(plugin.getDataFolder(), "models");
+        File vehiclesFolder = new File(plugin.getDataFolder(), "vehicles");
+        boolean found = false;
+        if (new File(modelsFolder, modelId + ".json").exists() 
+                || new File(vehiclesFolder, modelId + ".json").exists()
+                || new File(modelsFolder, modelId).exists()
+                || new File(vehiclesFolder, modelId).exists()
+                || modelId.matches("\\d{5,10}")) {
+            found = true;
+        }
+
+        org.bukkit.inventory.meta.ItemMeta meta = hand.getItemMeta();
+        if (meta == null) {
+            player.sendMessage(ChatColor.RED + "This item cannot have metadata applied.");
+            return;
+        }
+
+        org.bukkit.NamespacedKey modelKey = new org.bukkit.NamespacedKey(plugin, "bde_link_model");
+        org.bukkit.NamespacedKey usesKey = new org.bukkit.NamespacedKey(plugin, "bde_link_max_uses");
+        org.bukkit.NamespacedKey remainingKey = new org.bukkit.NamespacedKey(plugin, "bde_link_remaining");
+
+        meta.getPersistentDataContainer().set(modelKey, org.bukkit.persistence.PersistentDataType.STRING, modelId);
+        meta.getPersistentDataContainer().set(usesKey, org.bukkit.persistence.PersistentDataType.INTEGER, maxUses);
+        meta.getPersistentDataContainer().set(remainingKey, org.bukkit.persistence.PersistentDataType.INTEGER, maxUses);
+
+        // Add lore indicator
+        List<String> lore = meta.getLore();
+        if (lore == null) lore = new ArrayList<>();
+        // Remove any existing BDE link lore
+        lore.removeIf(line -> line.contains("§7[BDE Vehicle Spawner]") || line.contains("§7Model:") || line.contains("§7Uses:"));
+        lore.add("§7[BDE Vehicle Spawner]");
+        lore.add("§7Model: §e" + modelId);
+        lore.add("§7Uses: §e" + (maxUses == -1 ? "Infinite" : maxUses));
+        meta.setLore(lore);
+
+        hand.setItemMeta(meta);
+        player.getInventory().setItemInMainHand(hand);
+        player.sendMessage(ChatColor.GREEN + "Linked item to vehicle model: " + ChatColor.YELLOW + modelId + 
+            ChatColor.GREEN + " (Uses: " + (maxUses == -1 ? "Infinite" : maxUses) + ")");
+    }
+
     private void sendHelp(CommandSender sender) {
         sender.sendMessage(ChatColor.GOLD + "=== SansCraft BDE Command Guide ===");
         sender.sendMessage(ChatColor.YELLOW + "/bde spawn <id|filename> [scale] [x] [y] [z] [yaw] §7- Spawns model at coords");
@@ -780,12 +932,17 @@ public class BDECommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(ChatColor.YELLOW + "/bde traction §7- Opens the global block traction overrides GUI");
         sender.sendMessage(ChatColor.YELLOW + "/bde turret <list|load|create|edit|save|gui> ... §7- Manage turret templates");
         sender.sendMessage(ChatColor.YELLOW + "/bde projectile <list|load|create|edit|save|gui> ... §7- Manage projectile templates");
+        sender.sendMessage(ChatColor.YELLOW + "/bde repair gui §7- Opens the repair tools configuration GUI");
+        sender.sendMessage(ChatColor.YELLOW + "/bde repair reload §7- Reloads repairs.yml");
+        sender.sendMessage(ChatColor.YELLOW + "/bde ammo gui §7- Opens the ammo registry GUI");
+        sender.sendMessage(ChatColor.YELLOW + "/bde ammo reload §7- Reloads ammo.yml");
+        sender.sendMessage(ChatColor.YELLOW + "/bde link <modelId> [maxUses] §7- Links held item to spawn a vehicle (default 1 use, -1 for infinite)");
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-            return filter(Arrays.asList("spawn", "remove", "list", "anim", "convert", "block", "select", "deselect", "clear", "rotate", "gui", "move", "vehicles", "turrets", "projectiles", "debug", "traction", "test_transform", "turret", "projectile"), args[0]);
+            return filter(Arrays.asList("spawn", "remove", "list", "anim", "convert", "block", "select", "deselect", "clear", "rotate", "gui", "move", "vehicles", "turrets", "projectiles", "debug", "traction", "test_transform", "turret", "projectile", "repair", "link", "ammo"), args[0]);
         }
 
         String subcommand = args[0].toLowerCase();
@@ -826,9 +983,30 @@ public class BDECommand implements CommandExecutor, TabCompleter {
             if (subcommand.equals("turret") || subcommand.equals("projectile")) {
                 return filter(Arrays.asList("list", "load", "create", "edit", "save", "gui"), args[1]);
             }
+            if (subcommand.equals("repair")) {
+                return filter(Arrays.asList("gui", "reload"), args[1]);
+            }
+            if (subcommand.equals("ammo")) {
+                return filter(Arrays.asList("gui", "reload"), args[1]);
+            }
+            if (subcommand.equals("link")) {
+                List<String> list = new ArrayList<>();
+                File modelsFolder = new File(plugin.getDataFolder(), "models");
+                if (modelsFolder.exists()) {
+                    collectFiles(modelsFolder, "", list);
+                }
+                File vehiclesFolder = new File(plugin.getDataFolder(), "vehicles");
+                if (vehiclesFolder.exists()) {
+                    collectFiles(vehiclesFolder, "", list);
+                }
+                return filter(list, args[1]);
+            }
         }
 
         if (args.length == 3) {
+            if (subcommand.equals("link")) {
+                return filter(Arrays.asList("-1", "1", "5", "10"), args[2]);
+            }
             if (subcommand.equals("turret") && Arrays.asList("load", "edit", "save").contains(args[1].toLowerCase())) {
                 return filter(new ArrayList<>(plugin.getModelManager().getAvailableTurretIds()), args[2]);
             }

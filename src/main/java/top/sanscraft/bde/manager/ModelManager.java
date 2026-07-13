@@ -13,6 +13,10 @@ import org.bukkit.entity.ItemDisplay;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.TextDisplay;
 import org.bukkit.Color;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
+import org.bukkit.entity.Shulker;
+import org.bukkit.attribute.Attribute;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.metadata.FixedMetadataValue;
@@ -501,6 +505,35 @@ public class ModelManager {
         return 0f;
     }
 
+    private Shulker spawnInvisibleShulker(Location loc, double scale, ModelInstance instance) {
+        Shulker shulker = loc.getWorld().spawn(loc, Shulker.class);
+        shulker.setAI(false);
+        shulker.setSilent(true);
+        shulker.setInvulnerable(true);
+        shulker.setGravity(false);
+        shulker.setPersistent(false);
+        shulker.addScoreboardTag("bde_collider");
+        shulker.addScoreboardTag("bde_model_" + instance.getId().toString());
+        shulker.setMetadata("bde_instance_id", new FixedMetadataValue(plugin, instance.getId().toString()));
+        
+        shulker.addPotionEffect(new PotionEffect(
+            PotionEffectType.INVISIBILITY,
+            999999,
+            1,
+            false,
+            false
+        ));
+        
+        org.bukkit.attribute.AttributeInstance scaleAttr = shulker.getAttribute(Attribute.SCALE);
+        if (scaleAttr != null) {
+            scaleAttr.setBaseValue(scale);
+        }
+        if (instance.getVehicleRoot() != null) {
+            instance.getVehicleRoot().addPassenger(shulker);
+        }
+        return shulker;
+    }
+
     /**
      * Spawns a model in the world with scaling.
      */
@@ -578,7 +611,8 @@ public class ModelManager {
                 hbConfigs.add(fallback);
             }
 
-            for (BdeModel.HitboxConfig hc : hbConfigs) {
+            for (int i = 0; i < hbConfigs.size(); i++) {
+                BdeModel.HitboxConfig hc = hbConfigs.get(i);
                 Location hbLoc = ModelTransformEngine.getSeatPosition(location, hc.getOffset(), model.getSeatOffset(), scale, model.getFrontYawOffset());
                 hbLoc.setYaw(location.getYaw());
                 Interaction hb = location.getWorld().spawn(hbLoc, Interaction.class);
@@ -589,6 +623,8 @@ public class ModelManager {
                 hb.addScoreboardTag("bde_root");
                 hb.addScoreboardTag("bde_model_" + uuidStr);
                 hb.setMetadata("bde_instance_id", new FixedMetadataValue(plugin, uuidStr));
+                hb.setMetadata("bde_hitbox_name", new FixedMetadataValue(plugin, hc.getName()));
+                hb.setMetadata("bde_hitbox_index", new FixedMetadataValue(plugin, i));
                 
                 instance.getHitboxes().add(hb);
                 if (root == null) {
@@ -596,6 +632,22 @@ public class ModelManager {
                 }
             }
             instance.setRootEntity(root);
+
+            if (model.getCollidable() != null && model.getCollidable()) {
+                for (int i = 0; i < hbConfigs.size(); i++) {
+                    if (i >= instance.getHitboxes().size()) break;
+                    BdeModel.HitboxConfig hc = hbConfigs.get(i);
+                    Interaction hb = instance.getHitboxes().get(i);
+                    Location hbLoc = ModelTransformEngine.getSeatPosition(location, hc.getOffset(), model.getSeatOffset(), scale, model.getFrontYawOffset());
+                    hbLoc.setYaw(location.getYaw());
+                    double shulkerScale = Math.max(hc.getWidth() * scale, hc.getHeight() * scale);
+                    Shulker shulker = spawnInvisibleShulker(hbLoc, shulkerScale, instance);
+                    shulker.setMetadata("bde_hitbox_name", new FixedMetadataValue(plugin, hc.getName()));
+                    shulker.setMetadata("bde_hitbox_index", new FixedMetadataValue(plugin, i));
+                    hb.addPassenger(shulker);
+                    instance.getShulkerColliders().add(shulker);
+                }
+            }
 
             // Spawn co-passenger seat ArmorStands immediately
             List<List<Double>> pOffsets = model.getPassengerOffsets();
@@ -760,12 +812,55 @@ public class ModelManager {
                                 }
                                 instance.addPassenger(display);
                             }
+                            if (subModel.getCollidable() != null && subModel.getCollidable()) {
+                                BoundingBox subBox = calculateModelBounds(subModel, scale);
+                                double subRadius = Math.max(
+                                    Math.max(Math.abs(subBox.minX), Math.abs(subBox.maxX)),
+                                    Math.max(Math.abs(subBox.minZ), Math.abs(subBox.maxZ))
+                                );
+                                double subHeight = Math.max(0.1, subBox.maxY);
+                                double subShulkerScale = Math.max(subRadius * 2.0, subHeight);
+                                
+                                List<Double> mountOffset = sub.getMountOffset();
+                                if (mountOffset == null || mountOffset.isEmpty()) {
+                                    mountOffset = getSubsystemOffset(model, sub.getDisplayTag(this));
+                                }
+                                
+                                Location subLoc = ModelTransformEngine.getSubsystemComponentPosition(
+                                    location,
+                                    mountOffset,
+                                    Arrays.asList(0.0, 0.0, 0.0),
+                                    model.getSeatOffset(),
+                                    scale,
+                                    model.getFrontYawOffset(),
+                                    location.getYaw(),
+                                    location.getPitch(),
+                                    0.0,
+                                    0.0,
+                                    sub.getPivotOffset(this)
+                                );
+                                
+                                Shulker subShulker = spawnInvisibleShulker(subLoc, subShulkerScale, instance);
+                                subShulker.setMetadata("bde_subsystem_model_id", new FixedMetadataValue(plugin, subModelId));
+                                subShulker.setMetadata("bde_subsystem_parent_index", new FixedMetadataValue(plugin, subIdx));
+                                instance.getShulkerColliders().add(subShulker);
+                            }
                         }
                     } catch (Exception e) {
                         plugin.getLogger().log(java.util.logging.Level.WARNING, "Failed to load subsystem BDE model: " + subModelId, e);
                     }
                 }
             }
+        }
+
+        if (model.getVehicleStats() == null && model.getCollidable() != null && model.getCollidable()) {
+            double shulkerScale = Math.max(radius * 2f, interactionHeight);
+            
+            Location hitboxLoc = ModelTransformEngine.getHitboxPosition(location, model, scale);
+            hitboxLoc.setYaw(location.getYaw());
+            
+            Shulker shulker = spawnInvisibleShulker(hitboxLoc, shulkerScale, instance);
+            instance.getShulkerColliders().add(shulker);
         }
 
         return instance;
@@ -866,10 +961,26 @@ public class ModelManager {
             if (vehicleRoot != null) {
                 updateSeatLocations(instance);
                 updateHitboxLocation(instance);
-            } else if (root != null) {
-                Location hitboxLoc = ModelTransformEngine.getHitboxPosition(loc, instance.getModel(), scale);
-                hitboxLoc.setYaw(loc.getYaw());
-                root.teleport(hitboxLoc);
+            } else {
+                if (root != null) {
+                    Location hitboxLoc = ModelTransformEngine.getHitboxPosition(loc, instance.getModel(), scale);
+                    hitboxLoc.setYaw(loc.getYaw());
+                    root.teleport(hitboxLoc);
+                }
+                if (!instance.getShulkerColliders().isEmpty()) {
+                    Location hitboxLoc = ModelTransformEngine.getHitboxPosition(loc, instance.getModel(), scale);
+                    hitboxLoc.setYaw(loc.getYaw());
+                    double shulkerScale = Math.max(radius * 2f, interactionHeight);
+                    for (Shulker shulker : instance.getShulkerColliders()) {
+                        if (shulker != null && shulker.isValid()) {
+                            shulker.teleport(hitboxLoc);
+                            org.bukkit.attribute.AttributeInstance scaleAttr = shulker.getAttribute(Attribute.SCALE);
+                            if (scaleAttr != null) {
+                                scaleAttr.setBaseValue(shulkerScale);
+                            }
+                        }
+                    }
+                }
             }
 
             if (plugin.getBdeGuiManager() != null) {
@@ -1386,7 +1497,7 @@ public class ModelManager {
         }
 
         List<List<Vector3f>> clusters = new ArrayList<>();
-        float threshold = 1.5f;
+        float threshold = model.getHitboxScanThreshold() != null ? model.getHitboxScanThreshold() : 1.5f;
         for (Vector3f t : translations) {
             List<List<Vector3f>> matchingClusters = new ArrayList<>();
             for (List<Vector3f> cluster : clusters) {
@@ -1439,6 +1550,113 @@ public class ModelManager {
             hc.setHeight(Math.max(0.5, heightY));
             hc.setName("auto_" + i);
             hitboxes.add(hc);
+        }
+        float mergeDist = model.getHitboxMergeDistance() != null ? model.getHitboxMergeDistance() : 2.0f;
+        float mergeVolumeLimit = model.getHitboxMergeVolumeLimit() != null ? model.getHitboxMergeVolumeLimit() : 1.5f;
+
+        boolean mergedAny = true;
+        while (mergedAny && hitboxes.size() > 1) {
+            mergedAny = false;
+            int bestI = -1, bestJ = -1;
+            double bestVolumeRatio = Double.MAX_VALUE;
+
+            for (int i = 0; i < hitboxes.size(); i++) {
+                for (int j = i + 1; j < hitboxes.size(); j++) {
+                    BdeModel.HitboxConfig h1 = hitboxes.get(i);
+                    BdeModel.HitboxConfig h2 = hitboxes.get(j);
+
+                    double dx = h1.getOffset().get(0) - h2.getOffset().get(0);
+                    double dy = h1.getOffset().get(1) - h2.getOffset().get(1);
+                    double dz = h1.getOffset().get(2) - h2.getOffset().get(2);
+                    double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+                    if (dist > mergeDist) continue;
+
+                    double minX1 = h1.getOffset().get(0) - h1.getWidth() / 2.0;
+                    double maxX1 = h1.getOffset().get(0) + h1.getWidth() / 2.0;
+                    double minY1 = h1.getOffset().get(1);
+                    double maxY1 = h1.getOffset().get(1) + h1.getHeight();
+                    double minZ1 = h1.getOffset().get(2) - h1.getWidth() / 2.0;
+                    double maxZ1 = h1.getOffset().get(2) + h1.getWidth() / 2.0;
+
+                    double minX2 = h2.getOffset().get(0) - h2.getWidth() / 2.0;
+                    double maxX2 = h2.getOffset().get(0) + h2.getWidth() / 2.0;
+                    double minY2 = h2.getOffset().get(1);
+                    double maxY2 = h2.getOffset().get(1) + h2.getHeight();
+                    double minZ2 = h2.getOffset().get(2) - h2.getWidth() / 2.0;
+                    double maxZ2 = h2.getOffset().get(2) + h2.getWidth() / 2.0;
+
+                    double mergedMinX = Math.min(minX1, minX2);
+                    double mergedMaxX = Math.max(maxX1, maxX2);
+                    double mergedMinY = Math.min(minY1, minY2);
+                    double mergedMaxY = Math.max(maxY1, maxY2);
+                    double mergedMinZ = Math.min(minZ1, minZ2);
+                    double mergedMaxZ = Math.max(maxZ1, maxZ2);
+
+                    double mergedWidthX = (mergedMaxX - mergedMinX);
+                    double mergedWidthZ = (mergedMaxZ - mergedMinZ);
+                    double mergedWidth = Math.max(mergedWidthX, mergedWidthZ);
+                    double mergedHeight = (mergedMaxY - mergedMinY);
+
+                    double v1 = h1.getWidth() * h1.getWidth() * h1.getHeight();
+                    double v2 = h2.getWidth() * h2.getWidth() * h2.getHeight();
+                    double vMerged = mergedWidth * mergedWidth * mergedHeight;
+
+                    double ratio = vMerged / (v1 + v2);
+                    if (ratio <= mergeVolumeLimit && ratio < bestVolumeRatio) {
+                        bestVolumeRatio = ratio;
+                        bestI = i;
+                        bestJ = j;
+                    }
+                }
+            }
+
+            if (bestI != -1 && bestJ != -1) {
+                BdeModel.HitboxConfig h1 = hitboxes.get(bestI);
+                BdeModel.HitboxConfig h2 = hitboxes.get(bestJ);
+
+                double minX1 = h1.getOffset().get(0) - h1.getWidth() / 2.0;
+                double maxX1 = h1.getOffset().get(0) + h1.getWidth() / 2.0;
+                double minY1 = h1.getOffset().get(1);
+                double maxY1 = h1.getOffset().get(1) + h1.getHeight();
+                double minZ1 = h1.getOffset().get(2) - h1.getWidth() / 2.0;
+                double maxZ1 = h1.getOffset().get(2) + h1.getWidth() / 2.0;
+
+                double minX2 = h2.getOffset().get(0) - h2.getWidth() / 2.0;
+                double maxX2 = h2.getOffset().get(0) + h2.getWidth() / 2.0;
+                double minY2 = h2.getOffset().get(1);
+                double maxY2 = h2.getOffset().get(1) + h2.getHeight();
+                double minZ2 = h2.getOffset().get(2) - h2.getWidth() / 2.0;
+                double maxZ2 = h2.getOffset().get(2) + h2.getWidth() / 2.0;
+
+                double mergedMinX = Math.min(minX1, minX2);
+                double mergedMaxX = Math.max(maxX1, maxX2);
+                double mergedMinY = Math.min(minY1, minY2);
+                double mergedMaxY = Math.max(maxY1, maxY2);
+                double mergedMinZ = Math.min(minZ1, minZ2);
+                double mergedMaxZ = Math.max(maxZ1, maxZ2);
+
+                double mergedWidthX = (mergedMaxX - mergedMinX);
+                double mergedWidthZ = (mergedMaxZ - mergedMinZ);
+                double mergedWidth = Math.max(mergedWidthX, mergedWidthZ);
+                double mergedHeight = (mergedMaxY - mergedMinY);
+
+                double mergedCenterX = (mergedMinX + mergedMaxX) / 2.0;
+                double mergedCenterY = mergedMinY;
+                double mergedCenterZ = (mergedMinZ + mergedMaxZ) / 2.0;
+
+                BdeModel.HitboxConfig merged = new BdeModel.HitboxConfig();
+                merged.setOffset(Arrays.asList(mergedCenterX, mergedCenterY, mergedCenterZ));
+                merged.setWidth(mergedWidth);
+                merged.setHeight(mergedHeight);
+                merged.setName("merged_" + bestI + "_" + bestJ);
+
+                hitboxes.remove(bestJ);
+                hitboxes.remove(bestI);
+                hitboxes.add(merged);
+                
+                mergedAny = true;
+            }
         }
         return hitboxes;
     }
@@ -1907,6 +2125,15 @@ public class ModelManager {
                 root.teleport(hitboxLoc);
                 for (Entity passenger : passengers) {
                     root.addPassenger(passenger);
+                }
+            }
+            if (!instance.getShulkerColliders().isEmpty()) {
+                Location hitboxLoc = ModelTransformEngine.getHitboxPosition(newLoc, instance.getModel(), instance.getScale());
+                hitboxLoc.setYaw(newLoc.getYaw());
+                for (Shulker shulker : instance.getShulkerColliders()) {
+                    if (shulker != null && shulker.isValid()) {
+                        shulker.teleport(hitboxLoc);
+                    }
                 }
             }
         }
@@ -2450,6 +2677,37 @@ public class ModelManager {
         return box;
     }
 
+    /**
+     * Checks if a vehicle model at the given scale can fit at the target location
+     * without overlapping solid blocks.
+     */
+    public static boolean canVehicleFit(BdeModel model, double scale, Location location) {
+        BoundingBox box = calculateModelBounds(model, scale);
+        org.bukkit.World world = location.getWorld();
+        if (world == null) return false;
+
+        int minX = (int) Math.floor(location.getX() + box.minX);
+        int maxX = (int) Math.ceil(location.getX() + box.maxX);
+        int minY = (int) Math.floor(location.getY() + box.minY);
+        int maxY = (int) Math.ceil(location.getY() + box.maxY);
+        int minZ = (int) Math.floor(location.getZ() + box.minZ);
+        int maxZ = (int) Math.ceil(location.getZ() + box.maxZ);
+
+        int floorY = (int) Math.floor(location.getY());
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                if (y < floorY) continue; // Ignore ground blocks underneath the vehicle
+                for (int z = minZ; z <= maxZ; z++) {
+                    org.bukkit.block.Block block = world.getBlockAt(x, y, z);
+                    if (block.getType().isSolid()) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
     private static String extractValueProperty(String snbt) {
         int valIdx = snbt.indexOf("\"Value\"");
         if (valIdx == -1) {
@@ -2859,6 +3117,57 @@ public class ModelManager {
                     clearLockTarget(controller);
                 }
             }
+            List<Shulker> subShulkers = new ArrayList<>();
+            for (Shulker shulker : instance.getShulkerColliders()) {
+                if (shulker.hasMetadata("bde_subsystem_parent_index") &&
+                    shulker.getMetadata("bde_subsystem_parent_index").get(0).asInt() == subIdx) {
+                    subShulkers.add(shulker);
+                }
+            }
+
+            if (!subShulkers.isEmpty()) {
+                double subYawVal;
+                double subPitchVal;
+                if (controller != null && controller.isOnline()) {
+                    subYawVal = instance.getSubsystemAimYaw(sub.getName(), rootLoc.getYaw());
+                    subPitchVal = instance.getSubsystemAimPitch(sub.getName(), 0.0);
+                } else {
+                    subYawVal = rootLoc.getYaw();
+                    subPitchVal = 0.0;
+                }
+
+                double relativeYaw = ((subYawVal - rootLoc.getYaw()) % 360.0 + 540.0) % 360.0 - 180.0;
+                if (sub.getFovMinYaw(this) != null) relativeYaw = Math.max(sub.getFovMinYaw(this), relativeYaw);
+                if (sub.getFovMaxYaw(this) != null) relativeYaw = Math.min(sub.getFovMaxYaw(this), relativeYaw);
+                double relativePitch = subPitchVal;
+                if (sub.getFovMinPitch(this) != null) relativePitch = Math.max(sub.getFovMinPitch(this), relativePitch);
+                if (sub.getFovMaxPitch(this) != null) relativePitch = Math.min(sub.getFovMaxPitch(this), relativePitch);
+
+                List<Double> mountOffset = sub.getMountOffset();
+                if (mountOffset == null || mountOffset.isEmpty()) {
+                    mountOffset = getSubsystemOffset(model, sub.getDisplayTag(this));
+                }
+
+                Location subLoc = ModelTransformEngine.getSubsystemComponentPosition(
+                    rootLoc,
+                    mountOffset,
+                    Arrays.asList(0.0, 0.0, 0.0),
+                    model.getSeatOffset(),
+                    scale,
+                    model.getFrontYawOffset(),
+                    rootLoc.getYaw(),
+                    rootLoc.getPitch(),
+                    relativeYaw,
+                    relativePitch,
+                    sub.getPivotOffset(this)
+                );
+
+                for (Shulker shulker : subShulkers) {
+                    if (shulker != null && shulker.isValid()) {
+                        shulker.teleport(subLoc);
+                    }
+                }
+            }
         }
     }
 
@@ -3136,6 +3445,12 @@ public class ModelManager {
     }
 
     public void triggerSubsystemAction(ModelInstance instance, BdeModel.SubsystemConfig sub, Player player) {
+        if (instance.isSubsystemDisabled(sub.getName())) {
+            player.sendMessage("§cThis subsystem has been disabled due to damage!");
+            player.playSound(player.getLocation(), org.bukkit.Sound.BLOCK_ANVIL_LAND, 0.5f, 0.5f);
+            return;
+        }
+
         List<BdeModel.ProjectileConfig> modes = sub.getWeaponModes(this);
         if (modes.isEmpty()) return;
 
@@ -3149,6 +3464,29 @@ public class ModelManager {
         if (now - lastUse < (long) (config.getCooldown() * 1000.0)) {
             return;
         }
+
+        // Ammo requirement check & consumption (issue #6).
+        // Draws from the turret's private storage first, then the vehicle-shared pool.
+        // If the weapon mode has no ammoType configured, it fires freely (backward compatible).
+        String ammoTypeId = config.getAmmoType();
+        if (ammoTypeId != null && plugin.getBdeAmmoInventoryManager() != null) {
+            top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig ammo =
+                    plugin.getBdeAmmoConfig().getRegisteredAmmo().get(ammoTypeId);
+            // Fail open only if the referenced ammo type was removed from the registry.
+            if (ammo != null) {
+                int subIndex = instance.getModel().getVehicle() != null
+                        ? instance.getModel().getVehicle().getSubsystems().indexOf(sub) : -1;
+                int perShot = config.getAmmoPerShot();
+                if (!plugin.getBdeAmmoInventoryManager().tryConsumeAmmo(instance, subIndex, ammo, perShot)) {
+                    player.sendActionBar(Component.text("§cOut of ammo: " + ammo.name));
+                    player.playSound(player.getLocation(), org.bukkit.Sound.BLOCK_DISPENSER_FAIL, 0.7f, 1.0f);
+                    return; // do not fire and do not start the cooldown, so the player can reload and retry
+                }
+                int remaining = plugin.getBdeAmmoInventoryManager().countAvailableAmmo(instance, subIndex, ammo);
+                player.sendActionBar(Component.text("§e" + ammo.name + ": §f" + remaining + " §7rounds left"));
+            }
+        }
+
         playerCooldowns.put(sub.getName() + "_" + config.getName(), now);
 
         try {

@@ -84,7 +84,8 @@ public class BdeGuiListener implements Listener {
         EDIT_PROJECTILE_FLY_PARTICLE,
         EDIT_PROJECTILE_IMPACT_PARTICLE,
         EDIT_PROJECTILE_BASE_POINT,
-        EDIT_PROJECTILE_DIRECTION_VECTOR
+        EDIT_PROJECTILE_DIRECTION_VECTOR,
+        EDIT_AMMO_LORE
     }
 
     public static class ChatPromptState {
@@ -95,9 +96,22 @@ public class BdeGuiListener implements Listener {
         public final String blockMaterial;
         public final String turretId;
         public final String projectileId;
+        public final String ammoId;
 
         public ChatPromptState(ChatPromptType type, String modelProjectId, UUID instanceId, Integer seatIndex) {
             this(type, modelProjectId, instanceId, seatIndex, null, null, null);
+        }
+
+        /** Prompt tied to a registered ammo type (issue #6). */
+        public ChatPromptState(ChatPromptType type, String ammoId) {
+            this.type = type;
+            this.ammoId = ammoId;
+            this.modelProjectId = null;
+            this.instanceId = null;
+            this.seatIndex = null;
+            this.blockMaterial = null;
+            this.turretId = null;
+            this.projectileId = null;
         }
 
         public ChatPromptState(ChatPromptType type, String modelProjectId, UUID instanceId, Integer seatIndex, String blockMaterial) {
@@ -116,6 +130,7 @@ public class BdeGuiListener implements Listener {
             this.blockMaterial = blockMaterial;
             this.turretId = turretId;
             this.projectileId = projectileId;
+            this.ammoId = null;
         }
     }
 
@@ -165,10 +180,27 @@ public class BdeGuiListener implements Listener {
                 plugin.getBdeGuiManager().selectModel(player, instance.getId());
             }
         } else {
-            // Player right-clicked the model without the selector tool -> mount the vehicle!
+            // Player right-clicked the model without the selector tool -> check for repair tool or mount
             ModelInstance instance = plugin.getModelManager().getInstanceByRoot(root);
             if (instance != null) {
                 event.setCancelled(true);
+
+                // Check if holding a repair tool
+                if (instance.getModel().getVehicleStats() != null) {
+                    top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig repairTool = plugin.getBdeRepairTaskManager().findMatchingTool(hand);
+                    if (repairTool != null) {
+                        plugin.getBdeRepairTaskManager().startRepair(player, instance, repairTool, hand);
+                        return;
+                    }
+                }
+
+                if (player.isSneaking()) {
+                    if (instance.getModel().getVehicleStats() != null) {
+                        plugin.getBdeAmmoInventoryManager().openVehicleAmmoSelector(player, instance);
+                        return;
+                    }
+                }
+
                 ModelInstance ridden = getRiddenVehicle(player);
                 if (ridden != null && ridden.equals(instance)) {
                     // Right clicking own vehicle while riding! Trigger subsystem weapon instead.
@@ -189,6 +221,89 @@ public class BdeGuiListener implements Listener {
             Player player = event.getPlayer();
             ItemStack hand = player.getInventory().getItemInMainHand();
             
+            if (hand != null && hand.getType() != Material.AIR && hand.hasItemMeta()) {
+                org.bukkit.persistence.PersistentDataContainer pdc = hand.getItemMeta().getPersistentDataContainer();
+                org.bukkit.NamespacedKey modelKey = new org.bukkit.NamespacedKey(plugin, "bde_link_model");
+                if (pdc.has(modelKey, org.bukkit.persistence.PersistentDataType.STRING)) {
+                    event.setCancelled(true);
+                    
+                    if (event.getAction() != org.bukkit.event.block.Action.RIGHT_CLICK_BLOCK) {
+                        return; // Must right click a block to spawn
+                    }
+                    
+                    String modelId = pdc.get(modelKey, org.bukkit.persistence.PersistentDataType.STRING);
+                    org.bukkit.NamespacedKey remainingKey = new org.bukkit.NamespacedKey(plugin, "bde_link_remaining");
+                    org.bukkit.NamespacedKey usesKey = new org.bukkit.NamespacedKey(plugin, "bde_link_max_uses");
+                    
+                    int remaining = pdc.getOrDefault(remainingKey, org.bukkit.persistence.PersistentDataType.INTEGER, 1);
+                    int maxUses = pdc.getOrDefault(usesKey, org.bukkit.persistence.PersistentDataType.INTEGER, 1);
+                    
+                    if (remaining == 0) {
+                        player.sendMessage("§cThis vehicle spawner has no uses remaining!");
+                        return;
+                    }
+                    
+                    // Attempt to load the model definition
+                    BdeModel model;
+                    try {
+                        model = plugin.getModelManager().loadModelSync(modelId);
+                    } catch (Exception e) {
+                        player.sendMessage("§cFailed to load vehicle model '" + modelId + "': " + e.getMessage());
+                        return;
+                    }
+                    
+                    org.bukkit.block.Block clickedBlock = event.getClickedBlock();
+                    if (clickedBlock == null) return;
+                    
+                    Location spawnLoc = clickedBlock.getRelative(event.getBlockFace()).getLocation().add(0.5, 0.0, 0.5);
+                    spawnLoc.setYaw(player.getLocation().getYaw());
+                    spawnLoc.setPitch(0f);
+                    
+                    double scale = 1.0;
+                    
+                    // Check if vehicle can fit
+                    if (!top.sanscraft.bde.manager.ModelManager.canVehicleFit(model, scale, spawnLoc)) {
+                        player.sendMessage("§cCannot spawn vehicle: The space is too small or obstructed!");
+                        return;
+                    }
+                    
+                    // Spawn model
+                    try {
+                        plugin.getModelManager().spawnModel(model, spawnLoc, scale);
+                    } catch (Exception e) {
+                        player.sendMessage("§cError spawning vehicle: " + e.getMessage());
+                        return;
+                    }
+                    
+                    player.sendMessage("§aSpawned vehicle: §e" + modelId);
+                    player.playSound(spawnLoc, Sound.ENTITY_ARMOR_STAND_PLACE, 1.0f, 1.0f);
+                    
+                    // Decrement uses
+                    if (maxUses != -1) {
+                        remaining--;
+                        org.bukkit.inventory.meta.ItemMeta meta = hand.getItemMeta();
+                        meta.getPersistentDataContainer().set(remainingKey, org.bukkit.persistence.PersistentDataType.INTEGER, remaining);
+                        
+                        // Update lore
+                        List<String> lore = meta.getLore();
+                        if (lore != null) {
+                            lore.removeIf(line -> line.contains("§7Uses:"));
+                            lore.add("§7Uses: §e" + remaining);
+                            meta.setLore(lore);
+                        }
+                        
+                        hand.setItemMeta(meta);
+                        if (remaining <= 0) {
+                            hand.setAmount(hand.getAmount() - 1);
+                            player.sendMessage("§cYour vehicle spawner has broken!");
+                            player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 1.0f);
+                        }
+                        player.getInventory().setItemInMainHand(hand);
+                    }
+                    return;
+                }
+            }
+
             String selectorMatStr = plugin.getConfig().getString("gui.selector-tool", "BLAZE_ROD");
             Material selectorMat = Material.matchMaterial(selectorMatStr);
             if (selectorMat == null) selectorMat = Material.BLAZE_ROD;
@@ -290,6 +405,15 @@ public class BdeGuiListener implements Listener {
             case SUBSYSTEM_PROJECTILE_OVERRIDE:
                 handleSubsystemProjectileOverrideClick(player, instance, holder, event.getSlot(), clickedItem, event);
                 break;
+            case COLLISION_SETTINGS:
+                handleCollisionSettingsMenuClick(player, instance, event.getSlot(), event.getClick().isRightClick());
+                break;
+            case REPAIR_EDITOR:
+                handleRepairEditorClick(player, holder, event.getSlot(), clickedItem, event);
+                break;
+            case AMMO_EDITOR:
+                handleAmmoEditorClick(player, holder, event.getSlot(), clickedItem, event);
+                break;
         }
     }
 
@@ -302,6 +426,10 @@ public class BdeGuiListener implements Listener {
         switch (slot) {
             case 20: // Blocks Link Menu
                 plugin.getBdeGuiManager().openBlocksMenu(player, instance);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.0f);
+                break;
+            case 22: // Open Collision Settings Menu
+                plugin.getBdeGuiManager().openCollisionSettingsMenu(player, instance);
                 player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.0f);
                 break;
             case 21: // Movement & Rotation
@@ -536,6 +664,8 @@ public class BdeGuiListener implements Listener {
                     plugin.getBdeGuiManager().openVehicleMenu(player, null, model, modelProjectId);
                 }
                 return;
+
+
 
             case 14: // Rename catalog name
                 if (stats != null && !isRightClick) {
@@ -1830,6 +1960,30 @@ public class BdeGuiListener implements Listener {
                     });
                 }
                 break;
+
+            case EDIT_AMMO_LORE:
+                if (state.ammoId != null) {
+                    top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig existing =
+                            plugin.getBdeAmmoConfig().getRegisteredAmmo().get(state.ammoId);
+                    if (existing != null) {
+                        java.util.List<String> newLore = new java.util.ArrayList<>();
+                        if (!text.equalsIgnoreCase("clear")) {
+                            for (String part : text.split("\\|")) {
+                                newLore.add(org.bukkit.ChatColor.translateAlternateColorCodes('&', part.trim()));
+                            }
+                        }
+                        top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig updated =
+                                new top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig(
+                                        existing.id, existing.name, existing.material,
+                                        existing.customModelData, existing.customBlockId, newLore);
+                        plugin.getBdeAmmoConfig().addAmmo(updated);
+                        player.sendMessage(newLore.isEmpty()
+                                ? "§aCleared lore template for ammo: " + state.ammoId
+                                : "§aUpdated lore template for ammo: " + state.ammoId);
+                    }
+                    reopenMenu(player, state);
+                }
+                break;
         }
     }
 
@@ -1920,6 +2074,11 @@ public class BdeGuiListener implements Listener {
                 case EDIT_PROJECTILE_DIRECTION_VECTOR:
                     plugin.getBdeGuiManager().openProjectileEditor(player, state.projectileId);
                     break;
+                case EDIT_AMMO_LORE:
+                    if (state.ammoId != null) {
+                        plugin.getAmmoGuiManager().openAmmoEditor(player, state.ammoId);
+                    }
+                    break;
             }
         });
     }
@@ -1970,6 +2129,10 @@ public class BdeGuiListener implements Listener {
     }
 
     private void recreateModelInstance(ModelInstance instance, Player player) {
+        recreateModelInstance(instance, player, BdeGuiHolder.GuiType.VEHICLE);
+    }
+
+    private void recreateModelInstance(ModelInstance instance, Player player, BdeGuiHolder.GuiType menuToOpen) {
         Location currentLoc = instance.getLocation();
         double currentScale = instance.getScale();
         BdeModel model = instance.getModel();
@@ -1979,8 +2142,97 @@ public class BdeGuiListener implements Listener {
 
         ModelInstance newInstance = plugin.getModelManager().spawnModel(model, currentLoc, currentScale);
         plugin.getBdeGuiManager().selectModel(player, newInstance.getId());
-        plugin.getBdeGuiManager().openVehicleMenu(player, newInstance);
+        if (menuToOpen == BdeGuiHolder.GuiType.VEHICLE) {
+            plugin.getBdeGuiManager().openVehicleMenu(player, newInstance);
+        } else if (menuToOpen == BdeGuiHolder.GuiType.COLLISION_SETTINGS) {
+            plugin.getBdeGuiManager().openCollisionSettingsMenu(player, newInstance);
+        } else {
+            plugin.getBdeGuiManager().openMainMenu(player, newInstance);
+        }
         player.playSound(player.getLocation(), Sound.BLOCK_ANVIL_USE, 0.5f, 1.0f);
+    }
+
+    private void handleCollisionSettingsMenuClick(Player player, ModelInstance instance, int slot, boolean isRightClick) {
+        if (instance == null) {
+            player.closeInventory();
+            return;
+        }
+
+        BdeModel model = instance.getModel();
+
+        switch (slot) {
+            case 45: // Back
+                plugin.getBdeGuiManager().openMainMenu(player, instance);
+                return;
+            case 49: // Close
+                player.closeInventory();
+                return;
+
+            case 13: // Toggle Collision Mode
+                boolean currentCollidable = model.getCollidable() != null && model.getCollidable();
+                model.setCollidable(!currentCollidable);
+                if (model.getLocalFilePath() != null) {
+                    plugin.getModelManager().saveModelConfig(model);
+                }
+                recreateModelInstance(instance, player, BdeGuiHolder.GuiType.COLLISION_SETTINGS);
+                player.sendMessage("§aCollision " + (!currentCollidable ? "§aenabled" : "§cdisabled") + " for this model.");
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, !currentCollidable ? 1.2f : 0.8f);
+                break;
+
+            case 20: // Hitbox Scan Threshold
+                float currentThreshold = model.getHitboxScanThreshold() != null ? model.getHitboxScanThreshold() : 1.5f;
+                float nextThreshold = currentThreshold + (isRightClick ? -0.1f : 0.1f);
+                if (nextThreshold < 0.1f) nextThreshold = 0.1f;
+                model.setHitboxScanThreshold(nextThreshold);
+                
+                // Regenerate hitboxes with the new threshold and save them
+                if (model.getVehicle() != null) {
+                    model.getVehicle().setHitboxes(plugin.getModelManager().generateDynamicHitboxes(model));
+                }
+                
+                if (model.getLocalFilePath() != null) {
+                    plugin.getModelManager().saveModelConfig(model);
+                }
+                recreateModelInstance(instance, player, BdeGuiHolder.GuiType.COLLISION_SETTINGS);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, isRightClick ? 0.8f : 1.2f);
+                break;
+
+            case 22: // Hitbox Merge Distance
+                float currentMergeDist = model.getHitboxMergeDistance() != null ? model.getHitboxMergeDistance() : 2.0f;
+                float nextMergeDist = currentMergeDist + (isRightClick ? -0.2f : 0.2f);
+                if (nextMergeDist < 0.2f) nextMergeDist = 0.2f;
+                model.setHitboxMergeDistance(nextMergeDist);
+                
+                // Regenerate hitboxes with the new merge threshold
+                if (model.getVehicle() != null) {
+                    model.getVehicle().setHitboxes(plugin.getModelManager().generateDynamicHitboxes(model));
+                }
+                
+                if (model.getLocalFilePath() != null) {
+                    plugin.getModelManager().saveModelConfig(model);
+                }
+                recreateModelInstance(instance, player, BdeGuiHolder.GuiType.COLLISION_SETTINGS);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, isRightClick ? 0.8f : 1.2f);
+                break;
+
+            case 24: // Hitbox Merge Volume Limit
+                float currentVolume = model.getHitboxMergeVolumeLimit() != null ? model.getHitboxMergeVolumeLimit() : 1.5f;
+                float nextVolume = currentVolume + (isRightClick ? -0.05f : 0.05f);
+                if (nextVolume < 1.0f) nextVolume = 1.0f;
+                model.setHitboxMergeVolumeLimit(nextVolume);
+                
+                // Regenerate hitboxes with the new merge limit
+                if (model.getVehicle() != null) {
+                    model.getVehicle().setHitboxes(plugin.getModelManager().generateDynamicHitboxes(model));
+                }
+                
+                if (model.getLocalFilePath() != null) {
+                    plugin.getModelManager().saveModelConfig(model);
+                }
+                recreateModelInstance(instance, player, BdeGuiHolder.GuiType.COLLISION_SETTINGS);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, isRightClick ? 0.8f : 1.2f);
+                break;
+        }
     }
 
     private void handleAnimationsMenuClick(Player player, ModelInstance instance, int slot, ItemStack item, boolean isShift) {
@@ -2292,9 +2544,47 @@ public class BdeGuiListener implements Listener {
         plugin.getBdeGuiManager().filterBoundaryForNewPlayer(event.getPlayer());
     }
 
+    @EventHandler(priority = org.bukkit.event.EventPriority.LOWEST)
+    public void onEntityDamage(org.bukkit.event.entity.EntityDamageEvent event) {
+        Entity target = event.getEntity();
+        if (target instanceof org.bukkit.entity.Shulker && target.getScoreboardTags().contains("bde_collider")) {
+            event.setCancelled(true);
+        }
+    }
+
     @EventHandler(priority = EventPriority.HIGH)
     public void onEntityDamageByEntity(org.bukkit.event.entity.EntityDamageByEntityEvent event) {
         Entity target = event.getEntity();
+        if (target instanceof org.bukkit.entity.Shulker && target.getScoreboardTags().contains("bde_collider")) {
+            event.setCancelled(true);
+            if (target.hasMetadata("bde_instance_id")) {
+                String instanceIdStr = target.getMetadata("bde_instance_id").get(0).asString();
+                try {
+                    UUID instanceId = UUID.fromString(instanceIdStr);
+                    ModelInstance instance = plugin.getModelManager().getActiveInstances().get(instanceId);
+                    if (instance != null && instance.getRootEntity() instanceof Interaction) {
+                        Entity rootEntity = instance.getRootEntity();
+                        if (target.hasMetadata("bde_hitbox_name")) {
+                            rootEntity.setMetadata("bde_forwarded_hitbox_name", new org.bukkit.metadata.FixedMetadataValue(plugin, target.getMetadata("bde_hitbox_name").get(0).asString()));
+                        }
+                        if (target.hasMetadata("bde_hitbox_index")) {
+                            rootEntity.setMetadata("bde_forwarded_hitbox_index", new org.bukkit.metadata.FixedMetadataValue(plugin, target.getMetadata("bde_hitbox_index").get(0).asInt()));
+                        }
+                        
+                        org.bukkit.event.entity.EntityDamageByEntityEvent forwardedEvent = new org.bukkit.event.entity.EntityDamageByEntityEvent(
+                            event.getDamager(),
+                            rootEntity,
+                            event.getCause(),
+                            event.getDamageSource(),
+                            event.getDamage()
+                        );
+                        onEntityDamageByEntity(forwardedEvent);
+                    }
+                } catch (Exception ignored) {}
+            }
+            return;
+        }
+
         if (!(target instanceof Interaction)) return;
         Interaction hitbox = (Interaction) target;
         if (!hitbox.getScoreboardTags().contains("bde_root")) return;
@@ -2319,14 +2609,70 @@ public class BdeGuiListener implements Listener {
 
         event.setCancelled(true);
 
+        // Retrieve hitbox name/index
+        String hitboxName = "default";
+        int hitboxIndex = 0;
+        if (hitbox.hasMetadata("bde_forwarded_hitbox_name")) {
+            hitboxName = hitbox.getMetadata("bde_forwarded_hitbox_name").get(0).asString();
+            hitbox.removeMetadata("bde_forwarded_hitbox_name", plugin);
+        } else if (hitbox.hasMetadata("bde_hitbox_name")) {
+            hitboxName = hitbox.getMetadata("bde_hitbox_name").get(0).asString();
+        }
+        if (hitbox.hasMetadata("bde_forwarded_hitbox_index")) {
+            hitboxIndex = hitbox.getMetadata("bde_forwarded_hitbox_index").get(0).asInt();
+            hitbox.removeMetadata("bde_forwarded_hitbox_index", plugin);
+        } else if (hitbox.hasMetadata("bde_hitbox_index")) {
+            hitboxIndex = hitbox.getMetadata("bde_hitbox_index").get(0).asInt();
+        }
+
         // Check for custom damage in metadata
         double dmg = event.getFinalDamage();
         if (damager.hasMetadata("bde_damage")) {
             dmg = damager.getMetadata("bde_damage").getFirst().asDouble();
         }
 
+        // Apply armor settings
+        double armor = instance.getModel().getVehicleStats() != null ? instance.getModel().getVehicleStats().getArmor() : 0.0;
+        double actualDmg = Math.max(1.0, dmg - armor);
+
+        // Handle Subsystem-specific HP pools & disabling
+        if (instance.getModel().getVehicle() != null) {
+            List<BdeModel.HitboxConfig> hbConfigs = instance.getModel().getVehicle().getHitboxes();
+            BdeModel.HitboxConfig hc = null;
+            if (hbConfigs != null && hitboxIndex >= 0 && hitboxIndex < hbConfigs.size()) {
+                hc = hbConfigs.get(hitboxIndex);
+            }
+            if (hc != null && hc.getSubsystemName() != null && !hc.getSubsystemName().isEmpty()) {
+                String subName = hc.getSubsystemName();
+                BdeModel.SubsystemConfig subConfig = null;
+                for (BdeModel.SubsystemConfig sc : instance.getModel().getVehicle().getSubsystems()) {
+                    if (sc.getName().equalsIgnoreCase(subName)) {
+                        subConfig = sc;
+                        break;
+                    }
+                }
+                if (subConfig != null && subConfig.getMaxHp() != null && !instance.isSubsystemDisabled(subName)) {
+                    double subHp = instance.getSubsystemHp(subName) != null ? instance.getSubsystemHp(subName) : subConfig.getMaxHp();
+                    subHp = Math.max(0.0, subHp - actualDmg);
+                    instance.setSubsystemHp(subName, subHp);
+                    if (subHp <= 0.0) {
+                        instance.setSubsystemDisabled(subName, true);
+                        if (damager instanceof Player) {
+                            ((Player) damager).sendMessage("§cSubsystem " + subName + " has been disabled due to severe damage!");
+                        }
+                        Location hitLoc = hitbox.getLocation();
+                        hitLoc.getWorld().playSound(hitLoc, org.bukkit.Sound.BLOCK_ANVIL_BREAK, 1.0f, 0.8f);
+                    } else {
+                        if (damager instanceof Player) {
+                            ((Player) damager).sendMessage("§eSubsystem " + subName + " HP: §6" + String.format("%.1f", subHp) + "§7/§f" + String.format("%.1f", subConfig.getMaxHp()));
+                        }
+                    }
+                }
+            }
+        }
+
         double hp = instance.getCurrentHp();
-        hp = Math.max(0.0, hp - dmg);
+        hp = Math.max(0.0, hp - actualDmg);
         instance.setCurrentHp(hp);
 
         // Visual / Audio feedback
@@ -3216,6 +3562,34 @@ public class BdeGuiListener implements Listener {
             return;
         }
 
+        if (slot == 23) { // Cycle required ammo type (issue #6)
+            if (event.getClick().isRightClick()) {
+                pc.setAmmoType(null);
+                player.sendMessage("§aAmmo requirement cleared - this weapon now fires freely.");
+            } else {
+                java.util.List<String> ids = new java.util.ArrayList<>(plugin.getBdeAmmoConfig().getRegisteredAmmo().keySet());
+                if (ids.isEmpty()) {
+                    player.sendMessage("§cNo ammo types registered yet. Use §e/bde ammo gui §cto create one first.");
+                } else {
+                    String current = pc.getAmmoType();
+                    int idx = current == null ? -1 : ids.indexOf(current);
+                    idx = (idx + 1) % ids.size();
+                    pc.setAmmoType(ids.get(idx));
+                }
+            }
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+            plugin.getBdeGuiManager().openProjectileEditor(player, projectileId);
+            return;
+        }
+
+        if (slot == 24) { // Ammo per shot (issue #6)
+            int delta = event.getClick().isRightClick() ? -1 : 1;
+            pc.setAmmoPerShot(Math.max(1, pc.getAmmoPerShot() + delta));
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.2f);
+            plugin.getBdeGuiManager().openProjectileEditor(player, projectileId);
+            return;
+        }
+
         if (slot == 28) { // Cycle onHit action
             String current = pc.getOnHit();
             String next = "explode";
@@ -3401,6 +3775,375 @@ public class BdeGuiListener implements Listener {
             }
             player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
             plugin.getBdeGuiManager().openSubsystemProjectileOverrideMenu(player, instance, model, modelProjectId, subIndex);
+        }
+    }
+
+    private void handleRepairEditorClick(Player player, BdeGuiHolder holder, int slot, ItemStack clickedItem, InventoryClickEvent event) {
+        event.setCancelled(true);
+
+        String toolId = holder.getExtraData();
+        
+        if (toolId == null || toolId.isEmpty()) {
+            // We're in the repair catalog
+            if (slot == 45) {
+                player.closeInventory();
+                return;
+            }
+            if (slot == 49) {
+                // Add new repair tool - check cursor
+                ItemStack cursor = event.getCursor();
+                if (cursor != null && cursor.getType() != Material.AIR) {
+                    String newId = cursor.getType().name().toLowerCase();
+                    int suffix = 1;
+                    while (plugin.getBdeRepairConfig().getRegisteredTools().containsKey(newId)) {
+                        newId = cursor.getType().name().toLowerCase() + "_" + suffix;
+                        suffix++;
+                    }
+                    top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig newTool = new top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig(
+                        newId, "§6" + newId, cursor.getType(), 
+                        cursor.hasItemMeta() && cursor.getItemMeta().hasCustomModelData() ? cursor.getItemMeta().getCustomModelData() : -1,
+                        10.0, 0.0, 0.0, false, new java.util.HashMap<>()
+                    );
+                    plugin.getBdeRepairConfig().addTool(newTool);
+                    player.sendMessage("§aRegistered new repair tool: " + newId);
+                    player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.2f);
+                    plugin.getRepairGuiManager().openRepairCatalog(player);
+                } else {
+                    player.sendMessage("§cPlace an item on your cursor first, then click the star.");
+                }
+                return;
+            }
+            if (slot >= 9 && slot < 45) {
+                // Click on a tool entry -> open its editor
+                if (clickedItem != null && clickedItem.getType() != Material.AIR && clickedItem.hasItemMeta()) {
+                    String displayName = clickedItem.getItemMeta().getDisplayName();
+                    for (top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig t : plugin.getBdeRepairConfig().getRegisteredTools().values()) {
+                        if (displayName.contains(t.name)) {
+                            plugin.getRepairGuiManager().openRepairEditor(player, t.id);
+                            return;
+                        }
+                    }
+                }
+            }
+        } else {
+            // We're in a specific tool editor
+            top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig tool = plugin.getBdeRepairConfig().getRegisteredTools().get(toolId);
+            if (tool == null) {
+                plugin.getRepairGuiManager().openRepairCatalog(player);
+                return;
+            }
+
+            if (slot == 45) {
+                plugin.getRepairGuiManager().openRepairCatalog(player);
+                return;
+            }
+            if (slot == 49) {
+                player.closeInventory();
+                return;
+            }
+            if (slot == 40) {
+                plugin.getBdeRepairConfig().removeTool(toolId);
+                player.sendMessage("§cDeleted repair tool: " + toolId);
+                player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+                plugin.getRepairGuiManager().openRepairCatalog(player);
+                return;
+            }
+
+            boolean isLeft = event.isLeftClick();
+            if (slot == 20) {
+                double newAmount = Math.max(1.0, tool.repairAmount + (isLeft ? 5.0 : -5.0));
+                top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig updated = new top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig(
+                    tool.id, tool.name, tool.material, tool.customModelData, newAmount, tool.cooldown, tool.repairDelay, tool.visualCooldown, tool.repairCost
+                );
+                plugin.getBdeRepairConfig().addTool(updated);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+                plugin.getRepairGuiManager().openRepairEditor(player, toolId);
+            } else if (slot == 22) {
+                double newCooldown = Math.max(0.0, tool.cooldown + (isLeft ? 0.5 : -0.5));
+                top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig updated = new top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig(
+                    tool.id, tool.name, tool.material, tool.customModelData, tool.repairAmount, newCooldown, tool.repairDelay, tool.visualCooldown, tool.repairCost
+                );
+                plugin.getBdeRepairConfig().addTool(updated);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+                plugin.getRepairGuiManager().openRepairEditor(player, toolId);
+            } else if (slot == 24) {
+                double newDelay = Math.max(0.0, tool.repairDelay + (isLeft ? 0.5 : -0.5));
+                top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig updated = new top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig(
+                    tool.id, tool.name, tool.material, tool.customModelData, tool.repairAmount, tool.cooldown, newDelay, tool.visualCooldown, tool.repairCost
+                );
+                plugin.getBdeRepairConfig().addTool(updated);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+                plugin.getRepairGuiManager().openRepairEditor(player, toolId);
+            } else if (slot == 30) {
+                ItemStack cursor = event.getCursor();
+                if (cursor != null && cursor.getType() != Material.AIR) {
+                    java.util.Map<Material, Integer> newCost = new java.util.HashMap<>(tool.repairCost);
+                    if (isLeft) {
+                        newCost.merge(cursor.getType(), cursor.getAmount(), Integer::sum);
+                    } else {
+                        if (newCost.containsKey(cursor.getType())) {
+                            int remaining = newCost.get(cursor.getType()) - cursor.getAmount();
+                            if (remaining <= 0) {
+                                newCost.remove(cursor.getType());
+                            } else {
+                                newCost.put(cursor.getType(), remaining);
+                            }
+                        }
+                    }
+                    top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig updated = new top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig(
+                        tool.id, tool.name, tool.material, tool.customModelData, tool.repairAmount, tool.cooldown, tool.repairDelay, tool.visualCooldown, newCost
+                    );
+                    plugin.getBdeRepairConfig().addTool(updated);
+                    player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+                    plugin.getRepairGuiManager().openRepairEditor(player, toolId);
+                }
+            } else if (slot == 32) {
+                top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig updated = new top.sanscraft.bde.manager.BdeRepairConfig.RepairToolConfig(
+                    tool.id, tool.name, tool.material, tool.customModelData, tool.repairAmount, tool.cooldown, tool.repairDelay, !tool.visualCooldown, tool.repairCost
+                );
+                plugin.getBdeRepairConfig().addTool(updated);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+                plugin.getRepairGuiManager().openRepairEditor(player, toolId);
+            }
+        }
+    }
+    private void handleAmmoEditorClick(Player player, BdeGuiHolder holder, int slot, ItemStack clickedItem, InventoryClickEvent event) {
+        event.setCancelled(true);
+
+        String ammoId = holder.getExtraData();
+
+        if (ammoId != null && ammoId.equals("selector")) {
+            UUID selectedModelId = holder.getSelectedModelId();
+            ModelInstance instance = selectedModelId != null ? plugin.getModelManager().getActiveInstances().get(selectedModelId) : null;
+            if (instance == null) {
+                player.closeInventory();
+                return;
+            }
+
+            if (slot == 22) {
+                player.closeInventory();
+                return;
+            }
+            if (slot == 11) {
+                plugin.getBdeAmmoInventoryManager().openAmmoInventory(player, instance, "shared");
+                return;
+            }
+            if (slot >= 13 && slot <= 15) {
+                int subIdx = slot - 13;
+                BdeModel.VehicleConfig cfg = instance.getModel().getVehicle();
+                if (cfg != null && subIdx >= 0 && subIdx < cfg.getSubsystems().size()) {
+                    plugin.getBdeAmmoInventoryManager().openAmmoInventory(player, instance, "subsystem_" + subIdx);
+                }
+                return;
+            }
+            return;
+        }
+
+        if (ammoId == null || ammoId.isEmpty()) {
+            // We're in the ammo catalog
+            if (slot == 45) {
+                player.closeInventory();
+                return;
+            }
+            if (slot == 49) {
+                // Add new ammo type - check cursor
+                ItemStack cursor = event.getCursor();
+                if (cursor != null && cursor.getType() != Material.AIR) {
+                    String newId = cursor.getType().name().toLowerCase();
+                    int customModelData = cursor.hasItemMeta() && cursor.getItemMeta().hasCustomModelData() ? cursor.getItemMeta().getCustomModelData() : -1;
+                    String customBlockId = null;
+
+                    // Check if BDE custom block
+                    if (cursor.hasItemMeta()) {
+                        org.bukkit.NamespacedKey cbKey = new org.bukkit.NamespacedKey(plugin, "custom_block_id");
+                        customBlockId = cursor.getItemMeta().getPersistentDataContainer().get(cbKey, org.bukkit.persistence.PersistentDataType.STRING);
+                        if (customBlockId != null && !customBlockId.isEmpty()) {
+                            newId = customBlockId.toLowerCase();
+                        }
+                    }
+
+                    int suffix = 1;
+                    String finalId = newId;
+                    while (plugin.getBdeAmmoConfig().getRegisteredAmmo().containsKey(finalId)) {
+                        finalId = newId + "_" + suffix;
+                        suffix++;
+                    }
+
+                    String displayName = customBlockId != null && !customBlockId.isEmpty() ? customBlockId : cursor.getType().name();
+                    top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig newAmmo = new top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig(
+                            finalId, displayName, cursor.getType(), customModelData, customBlockId
+                    );
+                    plugin.getBdeAmmoConfig().addAmmo(newAmmo);
+                    player.sendMessage("§aRegistered new ammo type: " + finalId);
+                    player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.2f);
+                    plugin.getAmmoGuiManager().openAmmoCatalog(player);
+                } else {
+                    player.sendMessage("§cPlace an item on your cursor first, then click the star.");
+                }
+                return;
+            }
+            if (slot >= 9 && slot < 45) {
+                // Click on an ammo entry -> open its editor
+                if (clickedItem != null && clickedItem.getType() != Material.AIR && clickedItem.hasItemMeta()) {
+                    String displayName = clickedItem.getItemMeta().getDisplayName();
+                    for (top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig a : plugin.getBdeAmmoConfig().getRegisteredAmmo().values()) {
+                        if (displayName.contains(a.name)) {
+                            plugin.getAmmoGuiManager().openAmmoEditor(player, a.id);
+                            return;
+                        }
+                    }
+                }
+            }
+        } else {
+            // We're in a specific ammo editor
+            top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig ammo = plugin.getBdeAmmoConfig().getRegisteredAmmo().get(ammoId);
+            if (ammo == null) {
+                plugin.getAmmoGuiManager().openAmmoCatalog(player);
+                return;
+            }
+
+            if (slot == 45) {
+                plugin.getAmmoGuiManager().openAmmoCatalog(player);
+                return;
+            }
+            if (slot == 49) {
+                player.closeInventory();
+                return;
+            }
+            if (slot == 40) {
+                plugin.getBdeAmmoConfig().removeAmmo(ammoId);
+                player.sendMessage("§cDeleted ammo type: " + ammoId);
+                player.playSound(player.getLocation(), Sound.ENTITY_ITEM_BREAK, 1.0f, 0.8f);
+                plugin.getAmmoGuiManager().openAmmoCatalog(player);
+                return;
+            }
+            if (slot == 24) { // Edit lore template via chat
+                player.closeInventory();
+                player.sendMessage("§eType the ammo lore in chat. Separate lines with §f|§e (or type §fclear§e / §fcancel§e).");
+                player.sendMessage("§7Placeholders: §b%bde_ammo_current% §7(this storage) and §b%bde_ammo_total% §7(whole vehicle). Color codes with §f&§7 are supported.");
+                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_AMMO_LORE, ammoId));
+                return;
+            }
+            if (slot == 31) { // Clear lore template
+                top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig cleared =
+                        new top.sanscraft.bde.manager.BdeAmmoConfig.AmmoConfig(
+                                ammo.id, ammo.name, ammo.material, ammo.customModelData, ammo.customBlockId, new java.util.ArrayList<>());
+                plugin.getBdeAmmoConfig().addAmmo(cleared);
+                player.sendMessage("§aCleared lore template for ammo: " + ammoId);
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 0.5f, 1.2f);
+                plugin.getAmmoGuiManager().openAmmoEditor(player, ammoId);
+                return;
+            }
+        }
+    }
+
+    // === Repair Session Cancellation Handlers ===
+
+    @EventHandler
+    public void onPlayerMoveRepairCancel(org.bukkit.event.player.PlayerMoveEvent event) {
+        Player player = event.getPlayer();
+        // Only cancel if actually moved position (not just head rotation)
+        if (event.getFrom().getBlockX() != event.getTo().getBlockX()
+                || event.getFrom().getBlockY() != event.getTo().getBlockY()
+                || event.getFrom().getBlockZ() != event.getTo().getBlockZ()) {
+            plugin.getBdeRepairTaskManager().cancelRepair(player, "You moved!");
+        }
+    }
+
+    @EventHandler
+    public void onPlayerDamageRepairCancel(org.bukkit.event.entity.EntityDamageEvent event) {
+        if (event.getEntity() instanceof Player) {
+            Player player = (Player) event.getEntity();
+            plugin.getBdeRepairTaskManager().cancelRepair(player, "You took damage!");
+        }
+    }
+
+    // === Ammo Storage Listeners ===
+
+    @EventHandler
+    public void onAmmoStorageClick(InventoryClickEvent event) {
+        Inventory inv = event.getInventory();
+        if (!(inv.getHolder() instanceof top.sanscraft.bde.gui.BdeAmmoStorageHolder)) return;
+
+        Player player = (Player) event.getWhoClicked();
+        Inventory clickedInv = event.getClickedInventory();
+        if (clickedInv == null) return;
+
+        // If shift clicking from bottom inventory to top inventory
+        if (event.getAction() == org.bukkit.event.inventory.InventoryAction.MOVE_TO_OTHER_INVENTORY) {
+            if (clickedInv.equals(event.getView().getBottomInventory())) {
+                ItemStack item = event.getCurrentItem();
+                if (item != null && item.getType() != Material.AIR) {
+                    if (plugin.getBdeAmmoConfig().findMatchingAmmo(item) == null) {
+                        player.sendMessage("§cYou can only store registered ammo here!");
+                        event.setCancelled(true);
+                    }
+                }
+            }
+        }
+
+        // If clicking/placing directly inside the top inventory
+        if (clickedInv.equals(event.getView().getTopInventory())) {
+            ItemStack cursorItem = event.getCursor();
+            if (cursorItem != null && cursorItem.getType() != Material.AIR) {
+                if (event.getAction() == org.bukkit.event.inventory.InventoryAction.PLACE_ALL ||
+                    event.getAction() == org.bukkit.event.inventory.InventoryAction.PLACE_SOME ||
+                    event.getAction() == org.bukkit.event.inventory.InventoryAction.PLACE_ONE ||
+                    event.getAction() == org.bukkit.event.inventory.InventoryAction.SWAP_WITH_CURSOR) {
+                    
+                    if (plugin.getBdeAmmoConfig().findMatchingAmmo(cursorItem) == null) {
+                        player.sendMessage("§cYou can only store registered ammo here!");
+                        event.setCancelled(true);
+                    }
+                }
+            }
+            
+            // Hotbar swapping
+            if (event.getClick() == org.bukkit.event.inventory.ClickType.NUMBER_KEY) {
+                ItemStack hotbarItem = event.getWhoClicked().getInventory().getItem(event.getHotbarButton());
+                if (hotbarItem != null && hotbarItem.getType() != Material.AIR) {
+                    if (plugin.getBdeAmmoConfig().findMatchingAmmo(hotbarItem) == null) {
+                        player.sendMessage("§cYou can only store registered ammo here!");
+                        event.setCancelled(true);
+                    }
+                }
+            }
+        }
+    }
+
+    @EventHandler
+    public void onAmmoStorageDrag(org.bukkit.event.inventory.InventoryDragEvent event) {
+        Inventory inv = event.getInventory();
+        if (!(inv.getHolder() instanceof top.sanscraft.bde.gui.BdeAmmoStorageHolder)) return;
+
+        Player player = (Player) event.getWhoClicked();
+        ItemStack item = event.getOldCursor();
+        if (item != null && item.getType() != Material.AIR) {
+            boolean toTop = false;
+            for (int slot : event.getRawSlots()) {
+                if (slot < event.getInventory().getSize()) {
+                    toTop = true;
+                    break;
+                }
+            }
+            if (toTop && plugin.getBdeAmmoConfig().findMatchingAmmo(item) == null) {
+                player.sendMessage("§cYou can only store registered ammo here!");
+                event.setCancelled(true);
+            }
+        }
+    }
+
+    @EventHandler
+    public void onAmmoStorageClose(org.bukkit.event.inventory.InventoryCloseEvent event) {
+        Inventory inv = event.getInventory();
+        if (!(inv.getHolder() instanceof top.sanscraft.bde.gui.BdeAmmoStorageHolder)) return;
+
+        top.sanscraft.bde.gui.BdeAmmoStorageHolder holder = (top.sanscraft.bde.gui.BdeAmmoStorageHolder) inv.getHolder();
+        ModelInstance instance = plugin.getModelManager().getActiveInstances().get(holder.getInstanceId());
+        if (instance != null) {
+            // Reset ammo items' lore to the raw template before persisting so stored stacks stay canonical/stackable
+            plugin.getBdeAmmoInventoryManager().normalizeStorageLore(inv);
+            plugin.getBdeAmmoInventoryManager().saveAmmoInventory(instance, holder.getStorageKey(), inv);
         }
     }
 }
