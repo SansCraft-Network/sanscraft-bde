@@ -88,7 +88,9 @@ public class BdeGuiListener implements Listener {
         EDIT_AMMO_LORE,
         EDIT_AMMO_NAME,
         EDIT_AMMO_TYPE,
-        EDIT_AMMO_PLACEMENT_TARGET
+        EDIT_AMMO_PLACEMENT_TARGET,
+        EDIT_AMMO_CMD,
+        EDIT_AMMO_ITEMMODEL
     }
 
     public static class ChatPromptState {
@@ -2018,11 +2020,54 @@ public class BdeGuiListener implements Listener {
                         } else {
                             org.bukkit.Material m = org.bukkit.Material.matchMaterial(text.trim().toUpperCase());
                             if (m == null || !m.isBlock()) {
-                                player.sendMessage("§cNot a valid block material: " + text);
+                                player.sendMessage("§cThis material doesn't exist (or isn't a block): " + text);
                             } else {
                                 box.placementMaterial = m;
                                 player.sendMessage("§aPlacement vanilla block set to §f" + m.name());
                             }
+                        }
+                        plugin.getBdeAmmoConfig().addBox(box);
+                    }
+                    reopenMenu(player, state);
+                }
+                break;
+
+            case EDIT_AMMO_CMD:
+                if (state.ammoId != null) {
+                    top.sanscraft.bde.manager.BdeAmmoConfig.AmmoBoxConfig box = plugin.getBdeAmmoConfig().getBox(state.ammoId);
+                    if (box != null) {
+                        if (text.equalsIgnoreCase("clear")) {
+                            box.customModelData = -1;
+                            player.sendMessage("§aCleared custom model data.");
+                            plugin.getBdeAmmoConfig().addBox(box);
+                        } else {
+                            try {
+                                box.customModelData = Integer.parseInt(text.trim());
+                                player.sendMessage("§aCustom model data set to " + box.customModelData);
+                                plugin.getBdeAmmoConfig().addBox(box);
+                            } catch (NumberFormatException e) {
+                                player.sendMessage("§cThat isn't a number.");
+                            }
+                        }
+                    }
+                    reopenMenu(player, state);
+                }
+                break;
+
+            case EDIT_AMMO_ITEMMODEL:
+                if (state.ammoId != null) {
+                    top.sanscraft.bde.manager.BdeAmmoConfig.AmmoBoxConfig box = plugin.getBdeAmmoConfig().getBox(state.ammoId);
+                    if (box != null) {
+                        if (text.equalsIgnoreCase("clear")) {
+                            box.itemModel = null;
+                            player.sendMessage("§aCleared item model.");
+                        } else if (org.bukkit.NamespacedKey.fromString(text.trim()) == null) {
+                            player.sendMessage("§cInvalid item model key: " + text);
+                            reopenMenu(player, state);
+                            break;
+                        } else {
+                            box.itemModel = text.trim();
+                            player.sendMessage("§aItem model set to §f" + box.itemModel);
                         }
                         plugin.getBdeAmmoConfig().addBox(box);
                     }
@@ -2123,6 +2168,8 @@ public class BdeGuiListener implements Listener {
                 case EDIT_AMMO_NAME:
                 case EDIT_AMMO_TYPE:
                 case EDIT_AMMO_PLACEMENT_TARGET:
+                case EDIT_AMMO_CMD:
+                case EDIT_AMMO_ITEMMODEL:
                     if (state.ammoId != null) {
                         plugin.getAmmoGuiManager().openAmmoEditor(player, state.ammoId);
                     }
@@ -4001,11 +4048,9 @@ public class BdeGuiListener implements Listener {
                     return;
                 }
                 String baseId = cursor.getType().name().toLowerCase();
-                String itemCustomBlockId = null;
-                if (cursor.hasItemMeta()) {
-                    String cb = cursor.getItemMeta().getPersistentDataContainer().get(
-                            new org.bukkit.NamespacedKey(plugin, "custom_block_id"), org.bukkit.persistence.PersistentDataType.STRING);
-                    if (cb != null && !cb.isEmpty()) { itemCustomBlockId = cb; baseId = cb.toLowerCase(); }
+                String itemModel = null;
+                if (cursor.hasItemMeta() && cursor.getItemMeta().getItemModel() != null) {
+                    itemModel = cursor.getItemMeta().getItemModel().toString();
                 }
                 String finalId = baseId; int suffix = 1;
                 while (plugin.getBdeAmmoConfig().getBoxes().containsKey(finalId)) { finalId = baseId + "_" + (suffix++); }
@@ -4015,7 +4060,7 @@ public class BdeGuiListener implements Listener {
                 box.name = "§f" + cursor.getType().name();
                 box.material = cursor.getType();
                 box.customModelData = cursor.hasItemMeta() && cursor.getItemMeta().hasCustomModelData() ? cursor.getItemMeta().getCustomModelData() : -1;
-                box.itemCustomBlockId = itemCustomBlockId;
+                box.itemModel = itemModel;
                 box.suppliedType = finalId;
                 box.maxCapacity = 64;
                 box.defaultFill = 64;
@@ -4081,21 +4126,31 @@ public class BdeGuiListener implements Listener {
                 player.sendMessage("§7Placeholders: §b%bde_ammo_current% §7and §b%bde_ammo_max%§7. §f&§7 color codes ok.");
                 activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_AMMO_LORE, ammoId));
                 return;
+            case 19: // custom model data
+                player.closeInventory();
+                player.sendMessage("§eType a custom model data number (or 'clear' / 'cancel'):");
+                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_AMMO_CMD, ammoId));
+                return;
             case 20: {
                 ItemStack cursor = event.getCursor();
                 if (cursor == null || cursor.getType() == Material.AIR) {
-                    player.sendMessage("§cPlace an item on your cursor first to copy its appearance.");
+                    player.sendMessage("§cPlace an item on your cursor first to copy its material.");
                     return;
                 }
                 box.material = cursor.getType();
                 box.customModelData = cursor.hasItemMeta() && cursor.getItemMeta().hasCustomModelData() ? cursor.getItemMeta().getCustomModelData() : -1;
-                box.itemCustomBlockId = cursor.hasItemMeta() ? cursor.getItemMeta().getPersistentDataContainer().get(
-                        new org.bukkit.NamespacedKey(plugin, "custom_block_id"), org.bukkit.persistence.PersistentDataType.STRING) : null;
+                box.itemModel = (cursor.hasItemMeta() && cursor.getItemMeta().getItemModel() != null)
+                        ? cursor.getItemMeta().getItemModel().toString() : null;
                 plugin.getBdeAmmoConfig().addBox(box);
                 player.sendMessage("§aUpdated box appearance to " + box.material.name());
                 plugin.getAmmoGuiManager().openAmmoEditor(player, ammoId);
                 return;
             }
+            case 21: // item model
+                player.closeInventory();
+                player.sendMessage("§eType an item model, e.g. §fminecraft:iron_ingot §e(or 'clear' / 'cancel'):");
+                activePrompts.put(player.getUniqueId(), new ChatPromptState(ChatPromptType.EDIT_AMMO_ITEMMODEL, ammoId));
+                return;
             case 22:
                 box.placeable = !box.placeable;
                 plugin.getBdeAmmoConfig().addBox(box);

@@ -48,7 +48,7 @@ public class AmmoGuiManager {
             lore.add("§eLeft/Right-Click: §7Edit");
             lore.add("§eShift-Right-Click: §7Give box");
             lore.add("§eShift-Left-Click: §7Delete");
-            ItemStack entry = createGuiItem(box.material, "§6" + box.name, lore.toArray(new String[0]));
+            ItemStack entry = appearanceIcon(box, "§6" + box.name, lore.toArray(new String[0]));
             stampCatalogId(entry, box.id);
             inv.setItem(slot++, entry);
         }
@@ -79,7 +79,7 @@ public class AmmoGuiManager {
             if (i < 9 || i >= 45 || i % 9 == 0 || i % 9 == 8) inv.setItem(i, pane);
         }
 
-        inv.setItem(4, createGuiItem(box.material, "§6" + box.name, "§7ID: §f" + box.id));
+        inv.setItem(4, appearanceIcon(box, "§6" + box.name, "§7ID: §f" + box.id, "§7Supplies: §b" + box.suppliedType));
 
         inv.setItem(10, createGuiItem(Material.NAME_TAG, "§eRename Box",
                 "§7Current: §f" + box.name, " ", "§eClick to rename in chat."));
@@ -108,13 +108,22 @@ public class AmmoGuiManager {
         loreInfo.add("§eClick to edit in chat §7(| separates lines, 'clear' resets).");
         inv.setItem(14, createGuiItem(Material.WRITABLE_BOOK, "§eLore Template", loreInfo.toArray(new String[0])));
 
-        inv.setItem(20, createGuiItem(Material.ITEM_FRAME, "§eItem Appearance",
+        inv.setItem(19, createGuiItem(Material.PAINTING, "§eCustom Model Data: §f" + (box.customModelData == -1 ? "None" : box.customModelData),
+                "§7Applied to the box item without changing its material.",
+                " ", "§eClick to set in chat (or 'clear')."));
+
+        inv.setItem(20, appearanceIcon(box, "§eItem Appearance",
                 "§7Material: §f" + box.material.name(),
+                "§7Item Model: §f" + (box.itemModel == null ? "None" : box.itemModel),
                 "§7CustomModelData: §f" + (box.customModelData == -1 ? "None" : box.customModelData),
-                "§7Custom block model: §f" + (box.itemCustomBlockId == null ? "None" : box.itemCustomBlockId),
                 " ",
                 "§7Place an item on your cursor and click",
-                "§7to copy its appearance onto this box."));
+                "§7to copy its material onto this box."));
+
+        inv.setItem(21, createGuiItem(Material.ITEM_FRAME, "§eItem Model",
+                "§7Current: §f" + (box.itemModel == null ? "None" : box.itemModel),
+                "§7Overrides the visual, e.g. §fminecraft:iron_ingot",
+                " ", "§eClick to set in chat (or 'clear')."));
 
         inv.setItem(22, createGuiItem(box.placeable ? Material.GRASS_BLOCK : Material.BARRIER,
                 "§bPlaceable: " + (box.placeable ? "§a§lYES" : "§c§lNO"),
@@ -125,18 +134,36 @@ public class AmmoGuiManager {
                 "§7NONE, BDE_BLOCK (custom block), or VANILLA_BLOCK.",
                 "§eClick to cycle."));
 
-        String targetDesc;
+        // Placement target icon reflects what will actually be placed.
+        ItemStack targetIcon;
+        List<String> targetLore = new ArrayList<>();
         if (box.placementMode == BdeAmmoConfig.PlacementMode.BDE_BLOCK) {
-            targetDesc = "§7BDE block id: §f" + (box.placementBlockId == null ? "None" : box.placementBlockId);
+            ItemStack cb = (box.placementBlockId != null)
+                    ? plugin.getCustomBlockManager().createCustomBlockItem(box.placementBlockId, 1) : null;
+            targetIcon = (cb != null) ? cb : new ItemStack(Material.REPEATING_COMMAND_BLOCK);
+            targetLore.add("§7BDE block: §f" + (box.placementBlockId == null ? "None" : box.placementBlockId));
+            if (box.placementBlockId != null && cb == null) targetLore.add("§cNo item configured for that block.");
         } else if (box.placementMode == BdeAmmoConfig.PlacementMode.VANILLA_BLOCK) {
-            targetDesc = "§7Vanilla block: §f" + box.placementMaterial.name();
+            if (box.placementMaterial != null && box.placementMaterial.isItem()) {
+                targetIcon = new ItemStack(box.placementMaterial);
+                targetLore.add("§7Vanilla block: §f" + box.placementMaterial.name());
+            } else {
+                targetIcon = new ItemStack(Material.BARRIER);
+                targetLore.add("§cThis material doesn't exist.");
+            }
         } else {
-            targetDesc = "§8(placement disabled)";
+            targetIcon = new ItemStack(Material.STRUCTURE_VOID);
+            targetLore.add("§8(placement disabled)");
         }
-        inv.setItem(24, createGuiItem(Material.BRICKS, "§ePlacement Target",
-                targetDesc, " ",
-                "§eClick to set in chat",
-                "§7(a bde block id, or a material name)."));
+        targetLore.add(" ");
+        targetLore.add("§eClick to set in chat (a bde block id, or a material name).");
+        ItemMeta targetMeta = targetIcon.getItemMeta();
+        if (targetMeta != null) {
+            targetMeta.setDisplayName("§ePlacement Target");
+            targetMeta.setLore(targetLore);
+            targetIcon.setItemMeta(targetMeta);
+        }
+        inv.setItem(24, targetIcon);
 
         inv.setItem(30, createGuiItem(Material.CHEST_MINECART, "§aGive Me This Box",
                 "§7Gives you one box filled to its default."));
@@ -196,6 +223,20 @@ public class AmmoGuiManager {
 
     private ItemStack createGuiItem(Material material, String name, String... lore) {
         ItemStack item = new ItemStack(material);
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.setDisplayName(name);
+            List<String> loreList = new ArrayList<>();
+            for (String line : lore) loreList.add(line);
+            meta.setLore(loreList);
+            item.setItemMeta(meta);
+        }
+        return item;
+    }
+
+    /** GUI icon that shows the box's true appearance (material swap + item_model + CMD) with a name/lore. */
+    private ItemStack appearanceIcon(BdeAmmoConfig.AmmoBoxConfig box, String name, String... lore) {
+        ItemStack item = plugin.getAmmoBoxItems().appearanceItem(box);
         ItemMeta meta = item.getItemMeta();
         if (meta != null) {
             meta.setDisplayName(name);

@@ -43,21 +43,49 @@ public class AmmoBoxItems {
         this.keyLore = new NamespacedKey(plugin, "ammobox_lore");
     }
 
-    /** Build a fresh ammo-box item for the given definition, filled to {@code current}. */
-    public ItemStack create(BdeAmmoConfig.AmmoBoxConfig cfg, int current) {
-        ItemStack item;
-        if (cfg.itemCustomBlockId != null && !cfg.itemCustomBlockId.isEmpty()
-                && plugin.getCustomBlockManager() != null) {
-            ItemStack custom = plugin.getCustomBlockManager().createCustomBlockItem(cfg.itemCustomBlockId, 1);
-            item = custom != null ? custom : new ItemStack(cfg.material);
-        } else {
-            item = new ItemStack(cfg.material);
+    /** Block material used as the physical item type when a placeable box's own material isn't a block. */
+    private org.bukkit.Material defaultPlaceableBlock() {
+        org.bukkit.Material m = org.bukkit.Material.matchMaterial(
+                plugin.getConfig().getString("ammo.default-placeable-block", "TARGET"));
+        return (m != null && m.isBlock()) ? m : org.bukkit.Material.TARGET;
+    }
+
+    /**
+     * Builds an item with just this box's visual appearance (material + item_model + custom model data),
+     * no ammo PDC/name/lore. Used both as the base for {@link #create} and for GUI display icons.
+     *
+     * <p>If the box is placeable but its configured material is not a placeable block, the actual item
+     * material is swapped to the configured default block so the item can be placed, while its
+     * {@code item_model} is set to the original material so it still looks like the supplied item.
+     */
+    public ItemStack appearanceItem(BdeAmmoConfig.AmmoBoxConfig cfg) {
+        org.bukkit.Material actual = cfg.material != null ? cfg.material : org.bukkit.Material.BUNDLE;
+        String itemModel = (cfg.itemModel != null && !cfg.itemModel.isEmpty()) ? cfg.itemModel : null;
+
+        if (cfg.placeable && cfg.placementMode != BdeAmmoConfig.PlacementMode.NONE && !actual.isBlock()) {
+            if (itemModel == null) itemModel = actual.getKey().toString();
+            actual = defaultPlaceableBlock();
         }
 
+        ItemStack item = new ItemStack(actual);
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            if (cfg.customModelData != -1) meta.setCustomModelData(cfg.customModelData);
+            if (itemModel != null) {
+                NamespacedKey mk = NamespacedKey.fromString(itemModel);
+                if (mk != null) meta.setItemModel(mk);
+            }
+            item.setItemMeta(meta);
+        }
+        return item;
+    }
+
+    /** Build a fresh ammo-box item for the given definition, filled to {@code current}. */
+    public ItemStack create(BdeAmmoConfig.AmmoBoxConfig cfg, int current) {
+        ItemStack item = appearanceItem(cfg);
         ItemMeta meta = item.getItemMeta();
         if (meta != null) {
             meta.setDisplayName(cfg.name != null ? cfg.name : cfg.id);
-            if (cfg.customModelData != -1) meta.setCustomModelData(cfg.customModelData);
 
             PersistentDataContainer pdc = meta.getPersistentDataContainer();
             pdc.set(keyId, PersistentDataType.STRING, cfg.id);

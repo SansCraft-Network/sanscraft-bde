@@ -59,7 +59,7 @@ public class BdeAmmoConfig {
             Material mat = Material.matchMaterial(cfg.getString(base + "material", "BUNDLE"));
             box.material = mat != null ? mat : Material.BUNDLE;
             box.customModelData = cfg.getInt(base + "custom_model_data", -1);
-            box.itemCustomBlockId = emptyToNull(cfg.getString(base + "item_custom_block_id", null));
+            box.itemModel = emptyToNull(cfg.getString(base + "item_model", null));
 
             box.suppliedType = cfg.getString(base + "supplied_type", key);
             box.maxCapacity = Math.max(1, cfg.getInt(base + "max_capacity", 64));
@@ -93,8 +93,8 @@ public class BdeAmmoConfig {
             cfg.set(base + "name", b.name);
             cfg.set(base + "material", b.material.name());
             if (b.customModelData != -1) cfg.set(base + "custom_model_data", b.customModelData);
-            if (b.itemCustomBlockId != null && !b.itemCustomBlockId.isEmpty()) {
-                cfg.set(base + "item_custom_block_id", b.itemCustomBlockId);
+            if (b.itemModel != null && !b.itemModel.isEmpty()) {
+                cfg.set(base + "item_model", b.itemModel);
             }
             cfg.set(base + "supplied_type", b.suppliedType);
             cfg.set(base + "max_capacity", b.maxCapacity);
@@ -147,8 +147,8 @@ public class BdeAmmoConfig {
         public String name;
         public Material material = Material.BUNDLE;
         public int customModelData = -1;
-        /** Optional bde custom block whose configured item is used for this box's appearance. */
-        public String itemCustomBlockId;
+        /** Optional item_model resource location (e.g. "minecraft:iron_ingot") overriding the visual. */
+        public String itemModel;
         /** Ammo category this box supplies; a projectile's required ammoType must equal this. */
         public String suppliedType;
         public int maxCapacity = 64;

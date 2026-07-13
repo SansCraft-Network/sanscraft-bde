@@ -46,3 +46,7 @@ ammo:
   storage-size:
     vehicle: 27
     turret: 9
+  # When a placeable ammo box uses a non-block item (e.g. an iron ingot), the item's actual
+  # material is swapped to this block so it can be placed, while its item_model keeps the
+  # original look. The block type here is irrelevant to gameplay - it just needs to be placeable.
+  default-placeable-block: TARGET
