@@ -7,6 +7,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
@@ -17,7 +18,7 @@ import top.sanscraft.bde.manager.BdeAmmoConfig;
 /**
  * Handles placing ammo boxes as blocks and returning the box item (with its ammo) when broken.
  */
-public class AmmoBoxListener {
+public class AmmoBoxListener implements Listener {
     private final SansCraftBDEPlugin plugin;
 
     public AmmoBoxListener(SansCraftBDEPlugin plugin) {
